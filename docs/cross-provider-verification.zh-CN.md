@@ -57,6 +57,7 @@ cd backend && go build -tags embed -o bin/sub2api ./cmd/server
 - 上游 SSE 中的对应错误只在下游尚未输出时恢复；输出后不重试。
 - 重试保持会话、Codex 身份和 turn-state 头，不删除 compaction 项。
 - 原生 Claude Messages 和 count_tokens 路径移除明确的外来 OpenAI 思考块，并保留调用方原始历史。
+- `TestForwardAsAnthropicTLSReasoningRetry` 使用真实本地 TLS 服务器和专属可信客户端；保持 HTTPS 校验及仅限回环地址的 URL allowlist，验证流式／非流式模式下请求转换、HTTP 502 后一次重试、历史与身份头一致性，以及成功响应转换，不关闭证书验证。
 
 ### 路由与计费
 
@@ -73,7 +74,7 @@ cd backend && go build -tags embed -o bin/sub2api ./cmd/server
 
 使用独立 PostgreSQL 17、Redis 7 和嵌入前端的程序验证了：健康接口、首页、登录、测试对象创建、两类目标路由的 CRUD／预览、禁用规则行为、实际数据库迁移列及持久化值。
 
-完整运行实例到模拟上游的 HTTPS 转发未在该环境中验证；相关转发行为由模拟传输层和服务回归覆盖。没有使用真实模型凭据验证全部厂商组合。生产部署仍应先在预发布环境执行实际所需的上游、工具调用、账号固定失败和计费校验。
+独立完整运行实例到模拟上游的 HTTPS 转发未验证。服务边界另有真实本地 TLS 网络回归，以及模拟传输层测试；这不等同于完整应用入口到真实厂商的端到端验证。没有使用真实模型凭据验证全部厂商组合。生产部署仍应先在预发布环境执行实际所需的上游、工具调用、账号固定失败和计费校验。
 
 ## Windows 基线失败
 
