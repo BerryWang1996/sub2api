@@ -1,0 +1,6 @@
+# Overlay for an existing Sub2API deployment. Keep the original compose file,
+# service name, environment, networking and data-volume paths unchanged.
+# Set SUB2API_FORK_IMAGE to a published tag or (recommended) image@sha256:digest.
+services:
+  sub2api:
+    image: ${SUB2API_FORK_IMAGE:?Set SUB2API_FORK_IMAGE to a tested fork image tag or digest}

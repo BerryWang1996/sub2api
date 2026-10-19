@@ -1,0 +1,194 @@
+name: Fork image
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested image to this fork's GHCR package
+        type: boolean
+        default: false
+      release_tag:
+        description: Unique image tag (for example barry-20261019.1); required to publish
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-image-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'BerryWang1996/sub2api'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.source.outputs.version }}
+      tag: ${{ steps.source.outputs.tag }}
+      image: ${{ steps.source.outputs.image }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate publication inputs and source
+        id: source
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH" == true ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Publish only from main'; exit 1; }
+            [[ "$RELEASE_TAG" =~ ^barry-[0-9]{8}\.[0-9]+$ ]] || { echo 'Use a unique barry-YYYYMMDD.N tag'; exit 1; }
+          elif [[ -n "$RELEASE_TAG" && ! "$RELEASE_TAG" =~ ^barry-[0-9]{8}\.[0-9]+$ ]]; then
+            echo 'Invalid optional release tag'; exit 1
+          fi
+          sha=$(git rev-parse HEAD)
+          version="$(tr -d '\r\n' < backend/cmd/server/VERSION)-barry.${sha:0:12}"
+          {
+            echo "sha=$sha"
+            echo "version=$version"
+            echo "tag=$RELEASE_TAG"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm --dir frontend install --frozen-lockfile
+      - run: pnpm --dir frontend run lint:check
+      - run: pnpm --dir frontend run typecheck
+      - run: pnpm --dir frontend run test:run
+      - run: pnpm --dir frontend run build
+      - name: Backend unit tests
+        working-directory: backend
+        run: go test -mod=readonly -tags unit ./...
+      - name: Backend static checks
+        working-directory: backend
+        run: go vet ./...
+      - name: Routing and replay race regressions
+        working-directory: backend
+        run: go test -race -tags unit ./internal/service -run 'TestCompositeScopeIsolation_|TestGeminiCompositeRoute|TestForwardAsAnthropicTLS|TestForwardCountTokens_NativeAnthropic' -count=1
+      - name: Build embedded Linux application
+        working-directory: backend
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          CGO_ENABLED=0 go build -tags embed -trimpath \
+            -ldflags="-s -w -X main.Version=$VERSION -X main.Commit=$SOURCE_SHA -X main.BuildType=release" \
+            -o bin/sub2api ./cmd/server
+          ./bin/sub2api -version
+
+  image:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to fork registry
+        if: inputs.publish
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an existing release tag
+        if: inputs.publish
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$RELEASE_TAG" > /dev/null 2>&1; then
+            echo 'Release tag already exists; choose another tag instead of overwriting it'
+            exit 1
+          fi
+      - name: Build image for local runtime verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: sub2api-fork-smoke:local
+          build-args: |
+            VERSION=${{ needs.validate.outputs.version }}
+            COMMIT=${{ needs.validate.outputs.sha }}
+            GOPROXY=https://proxy.golang.org,direct
+            GOSUMDB=sum.golang.org
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.licenses=LGPL-3.0
+          cache-from: type=gha,scope=fork-amd64
+          cache-to: type=gha,mode=max,scope=fork-amd64
+      - name: Verify the actual container
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none sub2api-fork-smoke:local -version | tee /tmp/fork-version.txt
+          grep -F "$VERSION" /tmp/fork-version.txt
+          docker run --rm --network none --entrypoint /bin/sh sub2api-fork-smoke:local -c \
+            'test -r /app/LICENSE && test -r /app/NOTICE && test -s /app/resources/model-pricing/model_prices_and_context_window.json'
+      - name: Publish tested image
+        if: inputs.publish
+        id: publish
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ needs.validate.outputs.image }}:${{ needs.validate.outputs.tag }}
+            ${{ needs.validate.outputs.image }}:sha-${{ needs.validate.outputs.sha }}
+          build-args: |
+            VERSION=${{ needs.validate.outputs.version }}
+            COMMIT=${{ needs.validate.outputs.sha }}
+            GOPROXY=https://proxy.golang.org,direct
+            GOSUMDB=sum.golang.org
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.licenses=LGPL-3.0
+          cache-from: type=gha,scope=fork-amd64
+      - name: Record publication result
+        if: inputs.publish
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          {
+            echo '## Fork image published'
+            echo "- Version tag: \`$IMAGE:$RELEASE_TAG\`"
+            echo "- Immutable deployment reference: \`$IMAGE@$DIGEST\`"
+            echo "- Corresponding source: https://github.com/$GITHUB_REPOSITORY/tree/$SOURCE_SHA"
+            echo '- No server deployment was performed.'
+          } >> "$GITHUB_STEP_SUMMARY"

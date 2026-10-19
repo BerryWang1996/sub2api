@@ -1,0 +1,13 @@
+Sub2API
+
+Upstream project: https://github.com/Wei-Shaw/sub2api
+Fork source: https://github.com/BerryWang1996/sub2api
+
+This fork includes modifications to cross-provider reasoning compatibility,
+Composite destination routing, and fork maintenance/release workflows.
+Original copyright, license, and contributor notices remain applicable.
+See LICENSE for the GNU Lesser General Public License, version 3.
+
+For an image built by the fork workflow, org.opencontainers.image.revision
+identifies the corresponding source commit in the fork repository. The workflow
+summary records that source URL together with the published image digest.
