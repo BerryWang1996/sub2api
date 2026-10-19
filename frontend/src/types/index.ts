@@ -706,6 +706,8 @@ export interface CompositeModelRoute {
   public_model: string
   match_type: CompositeRouteMatchType
   target_platform: Exclude<GroupPlatform, 'composite'>
+  target_group_id?: number | null
+  target_account_id?: number | null
   upstream_model: string
   endpoint: CompositeRouteEndpoint
   priority: number
@@ -719,6 +721,8 @@ export interface CompositeModelRouteInput {
   public_model: string
   match_type: CompositeRouteMatchType
   target_platform: Exclude<GroupPlatform, 'composite'>
+  target_group_id?: number | null
+  target_account_id?: number | null
   upstream_model?: string
   endpoint: CompositeRouteEndpoint
   priority?: number
@@ -737,6 +741,8 @@ export interface CompositeRouteDecision {
   group_id: number
   public_model: string
   target_platform: Exclude<GroupPlatform, 'composite'> | ''
+  target_group_id?: number | null
+  target_account_id?: number | null
   upstream_model: string
   endpoint: CompositeRouteEndpoint
   route?: CompositeModelRoute
