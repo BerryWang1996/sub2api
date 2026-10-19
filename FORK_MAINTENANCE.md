@@ -1,6 +1,7 @@
 # BerryWang1996 fork：维护与镜像发布
 
-维护仓库：<https://github.com/BerryWang1996/sub2api>  
+维护仓库：<https://github.com/BerryWang1996/sub2api>
+
 上游仓库：<https://github.com/Wei-Shaw/sub2api>
 
 本 fork 保留上游许可证、版权及协议文件。独立运行和维护 fork 不依赖上游合并 PR；贡献者 CLA 与软件使用许可证、管理员合规确认及上游模型服务条款是不同事项，本流程不替任何人签署协议。
