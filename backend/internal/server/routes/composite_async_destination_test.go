@@ -23,9 +23,10 @@ func TestCompositeExplicitDestinationRejectsAsyncVideoWithoutOwnerGrant(t *testi
 					TargetPlatform: service.PlatformGrok, UpstreamModel: "grok-imagine-video", Endpoint: service.CompositeRouteEndpointAny,
 					Enabled: true, Priority: 100,
 				}
-				if target == "group" {
+				switch target {
+				case "group":
 					route.TargetGroupID = &id
-				} else if target == "account" {
+				case "account":
 					route.TargetAccountID = &id
 				}
 				resolver := service.NewCompositeRouteResolver(compositeRouteRepoStub{routes: []service.CompositeModelRoute{route}})

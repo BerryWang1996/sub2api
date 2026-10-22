@@ -136,12 +136,8 @@ func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage
 	}
 }
 
-// convertAnthropicToResponsesInput builds the Responses API input items array
-// from the Anthropic system field and message list.
-func convertAnthropicToResponsesInput(system json.RawMessage, msgs []AnthropicMessage) ([]ResponsesInputItem, error) {
-	return convertAnthropicToResponsesInputWithPolicy(system, msgs, ReasoningReplayGrokLegacy)
-}
-
+// convertAnthropicToResponsesInputWithPolicy builds Responses input using the
+// destination's replay policy for the Anthropic system field and message list.
 func convertAnthropicToResponsesInputWithPolicy(system json.RawMessage, msgs []AnthropicMessage, policy ReasoningReplayPolicy) ([]ResponsesInputItem, error) {
 	var out []ResponsesInputItem
 
@@ -201,12 +197,8 @@ func isAnthropicBillingHeaderText(text string) bool {
 	return strings.HasPrefix(text, "x-anthropic-billing-header: ")
 }
 
-// anthropicMsgToResponsesItems converts a single Anthropic message into one
-// or more Responses API input items.
-func anthropicMsgToResponsesItems(m AnthropicMessage) ([]ResponsesInputItem, error) {
-	return anthropicMsgToResponsesItemsWithPolicy(m, ReasoningReplayGrokLegacy)
-}
-
+// anthropicMsgToResponsesItemsWithPolicy converts a single Anthropic message
+// into one or more Responses API input items.
 func anthropicMsgToResponsesItemsWithPolicy(m AnthropicMessage, policy ReasoningReplayPolicy) ([]ResponsesInputItem, error) {
 	switch m.Role {
 	case "user":
@@ -285,16 +277,8 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 	return out, nil
 }
 
-// anthropicAssistantToResponses handles an Anthropic assistant message.
-// Text content → assistant message with output_text parts.
-// tool_use blocks → function_call items.
-// thinking blocks with signature → reasoning items (encrypted_content) so
-// multi-turn Grok/Codex prompt cache can reuse prior reasoning prefixes.
-// thinking without signature remains ignored (not accepted as plain text input).
-func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, error) {
-	return anthropicAssistantToResponsesWithPolicy(raw, ReasoningReplayGrokLegacy)
-}
-
+// anthropicAssistantToResponsesWithPolicy preserves assistant text and tool
+// order, replaying encrypted reasoning only when allowed by the destination.
 func anthropicAssistantToResponsesWithPolicy(raw json.RawMessage, policy ReasoningReplayPolicy) ([]ResponsesInputItem, error) {
 	// Try plain string.
 	var s string

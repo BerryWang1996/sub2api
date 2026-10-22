@@ -458,7 +458,7 @@ retryMessagesUpstream:
 		ctx = markMessagesReasoningReplayRetried(ctx)
 		logger.L().Info("openai messages: retrying once without rejected encrypted reasoning", zap.Int64("account_id", account.ID))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
