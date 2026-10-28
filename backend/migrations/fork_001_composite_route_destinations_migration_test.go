@@ -8,13 +8,15 @@ import (
 )
 
 func TestCompositeRouteDestinationsMigrationFailsClosed(t *testing.T) {
-	content, err := FS.ReadFile("249_composite_route_destinations.sql")
+	content, err := FS.ReadFile("fork_001_composite_route_destinations.sql")
 	require.NoError(t, err)
 	sql := strings.Join(strings.Fields(string(content)), " ")
-	// Databases that applied the earlier 246_composite_route_destinations.sql
+	// Databases that applied the earlier 246_/249_composite_route_destinations.sql
 	// re-run this file, so every statement must tolerate existing objects.
-	_, err = FS.ReadFile("246_composite_route_destinations.sql")
-	require.Error(t, err)
+	for _, legacy := range []string{"246_composite_route_destinations.sql", "249_composite_route_destinations.sql"} {
+		_, err = FS.ReadFile(legacy)
+		require.Error(t, err, legacy)
+	}
 	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS target_group_id")
 	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS target_account_id")
 	require.Equal(t, 6, strings.Count(sql, "IF NOT EXISTS (SELECT 1 FROM pg_constraint"))

@@ -1,9 +1,10 @@
 -- Explicit upstream resource grants. Never SET NULL on deletion: that would
 -- silently convert a restricted route into the legacy composite platform pool.
 --
--- Idempotent: early builds shipped this schema as 246_composite_route_destinations.sql,
--- which later collided with an upstream migration number. Databases that already
--- applied that file re-run this one as a no-op.
+-- Fork-owned migration (fork_NNN_ namespace, see FORK_MAINTENANCE.md). Earlier
+-- builds shipped this schema as 246_composite_route_destinations.sql and then
+-- 249_composite_route_destinations.sql, both inside upstream's numeric range.
+-- Databases that applied either file re-run this one as a no-op.
 ALTER TABLE composite_model_routes
     ADD COLUMN IF NOT EXISTS target_group_id BIGINT NULL,
     ADD COLUMN IF NOT EXISTS target_account_id BIGINT NULL;

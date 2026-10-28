@@ -119,7 +119,7 @@ go build -tags embed -o bin/sub2api ./cmd/server
 
 ### 数据库迁移
 
-新增 `backend/migrations/249_composite_route_destinations.sql`，由正常启动迁移流程执行：
+新增 `backend/migrations/fork_001_composite_route_destinations.sql`（分叉专用迁移命名空间，见 `FORK_MAINTENANCE.md`；已应用过早期 246_/249_ 同名迁移的库会把它当作无操作重跑），由正常启动迁移流程执行：
 
 - 新增两个可空目标 ID；旧数据保持为空。
 - 数据库校验互斥、正数和禁止自指。

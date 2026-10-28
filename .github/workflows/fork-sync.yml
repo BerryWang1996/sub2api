@@ -14,7 +14,7 @@ jobs:
   sync:
     if: github.repository == 'BerryWang1996/sub2api' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -24,6 +24,13 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
+      # The migration checks use the toolchain from the fork's go.mod; Docker for
+      # the upgrade-path test is preinstalled on ubuntu-latest.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
 
       - name: Merge upstream into a fork-only review branch
         shell: bash
@@ -102,6 +109,24 @@ jobs:
           merged_sha="$(git rev-parse HEAD)"
           printf '\nSynchronized full HEAD SHA: %s\n' "$merged_sha" >> "$GITHUB_STEP_SUMMARY"
 
+          # Migration checks (FORK_MAINTENANCE.md, 数据库迁移与上游同步). A failure
+          # still pushes the review branch so it can be fixed there, but fails the run.
+          git fetch --no-tags upstream '+refs/tags/v*:refs/upstream-tags/v*'
+          latest_tag="$(git for-each-ref --merged upstream/main --sort=-version:refname --count=1 \
+            --format='%(refname)' 'refs/upstream-tags/v*')"
+          checks_log="$RUNNER_TEMP/fork-migration-checks.log"
+          checks_status=passed
+          {
+            bash scripts/fork-migration-guard.sh upstream/main origin/main &&
+              (cd backend && go test -count=1 ./migrations/) &&
+              bash scripts/fork-migration-upgrade-test.sh origin/main ${latest_tag:+"$latest_tag"}
+          } > "$checks_log" 2>&1 || checks_status=failed
+          cat "$checks_log"
+          checks_summary="$(grep -E '^(::(error|warning)::|ERROR:|WARNING:|fork migration guard:|new upstream migrations|--- (PASS|FAIL)|FAIL|ok )' "$checks_log" | sed 's/^::\(error\|warning\)::/\1: /' || true)"
+          {
+            printf '\n### Migration checks: %s\n\n```text\n%s\n```\n' "$checks_status" "$checks_summary"
+          } >> "$GITHUB_STEP_SUMMARY"
+
           # The only push destination is a review branch in this fork.
           git push origin "HEAD:refs/heads/$branch"
           body_file="$RUNNER_TEMP/fork-sync-pr-body.txt"
@@ -111,6 +136,14 @@ jobs:
           Merge Wei-Shaw/sub2api main at $upstream_sha into the fork's main history, preserving fork patches. This PR targets BerryWang1996/sub2api:main only; it is not a contribution PR to upstream.
 
           Synchronized full HEAD SHA: $merged_sha
+
+          ## Migration checks: $checks_status
+
+          Guard against upstream migration conflicts, fork migration policy tests, and upgrade replay from fork main and ${latest_tag:-no upstream tag} compared with a fresh install. Review every warning: new upstream migrations that touch objects defined by fork migrations run after the fork DDL on existing fork databases.
+
+          \`\`\`text
+          $checks_summary
+          \`\`\`
 
           ## Required manual validation
 
@@ -123,6 +156,10 @@ jobs:
           if pr_url="$(gh pr create --repo "$repo" --base main --head "$branch" \
             --title "Sync upstream main (${upstream_sha:0:12})" --body-file "$body_file")"; then
             printf '\nCreated internal PR: %s\n' "$pr_url" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [[ "$checks_status" != passed ]]; then
+              echo '::error::Migration checks failed; fix them on the sync branch before merging.'
+              exit 1
+            fi
           else
             printf '\nPR creation failed; the fork branch %s is preserved. Open an internal PR to fork main manually, or retry this workflow after the repository owner approves Actions PR creation.\n' "$branch" >> "$GITHUB_STEP_SUMMARY"
             exit 1
