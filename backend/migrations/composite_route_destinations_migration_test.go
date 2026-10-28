@@ -8,9 +8,17 @@ import (
 )
 
 func TestCompositeRouteDestinationsMigrationFailsClosed(t *testing.T) {
-	content, err := FS.ReadFile("246_composite_route_destinations.sql")
+	content, err := FS.ReadFile("249_composite_route_destinations.sql")
 	require.NoError(t, err)
 	sql := strings.Join(strings.Fields(string(content)), " ")
+	// Databases that applied the earlier 246_composite_route_destinations.sql
+	// re-run this file, so every statement must tolerate existing objects.
+	_, err = FS.ReadFile("246_composite_route_destinations.sql")
+	require.Error(t, err)
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS target_group_id")
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS target_account_id")
+	require.Equal(t, 6, strings.Count(sql, "IF NOT EXISTS (SELECT 1 FROM pg_constraint"))
+	require.Equal(t, 2, strings.Count(sql, "CREATE INDEX IF NOT EXISTS"))
 	require.Contains(t, sql, "target_group_id BIGINT NULL")
 	require.Contains(t, sql, "target_account_id BIGINT NULL")
 	require.Contains(t, sql, "CHECK (target_group_id IS NULL OR target_account_id IS NULL)")
