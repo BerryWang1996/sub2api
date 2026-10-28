@@ -119,7 +119,7 @@ go build -tags embed -o bin/sub2api ./cmd/server
 
 ### 数据库迁移
 
-新增 `backend/migrations/247_composite_route_destinations.sql`，由正常启动迁移流程执行：
+新增 `backend/migrations/249_composite_route_destinations.sql`，由正常启动迁移流程执行：
 
 - 新增两个可空目标 ID；旧数据保持为空。
 - 数据库校验互斥、正数和禁止自指。
