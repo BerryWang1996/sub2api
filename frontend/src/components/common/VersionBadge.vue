@@ -4,15 +4,15 @@
     <template v-if="isAdmin">
       <button
         @click="toggleDropdown"
-        class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
+        class="flex max-w-full items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
         :class="[
           hasUpdate
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="versionStatus"
       >
-        <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
+        <span v-if="currentVersion" class="min-w-0 break-all font-medium">{{ currentVersion }}</span>
         <span
           v-else
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
@@ -80,16 +80,16 @@
             <template v-else>
               <!-- Version display - centered and prominent -->
               <div class="mb-4 text-center">
-                <div class="inline-flex items-center gap-2">
+                <div class="flex flex-wrap items-center justify-center gap-2">
                   <span
                     v-if="currentVersion"
-                    class="text-2xl font-bold text-gray-900 dark:text-white"
-                    >v{{ currentVersion }}</span
+                    class="min-w-0 break-all text-2xl font-bold text-gray-900 dark:text-white"
+                    >{{ currentVersion }}</span
                   >
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
                   <span
-                    v-if="!hasUpdate"
+                    v-if="!hasUpdate && !versionWarning"
                     class="flex h-5 w-5 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
                   >
                     <svg
@@ -108,8 +108,8 @@
                 <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   {{
                     hasUpdate
-                      ? t('version.latestVersion') + ': v' + latestVersion
-                      : t('version.upToDate')
+                      ? t('version.latestVersion') + ': ' + latestVersion
+                      : versionStatus
                   }}
                 </p>
               </div>
@@ -231,6 +231,21 @@
                 </button>
               </div>
 
+              <div v-else-if="isForkBuild" class="space-y-2">
+                <p class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300">
+                  {{ t('version.forkImageHint') }}
+                </p>
+                <a v-if="manualUpdateUrl" :href="manualUpdateUrl" target="_blank" rel="noopener noreferrer"
+                  class="flex items-center justify-center gap-1 text-sm text-primary-600 dark:text-primary-400">
+                  {{ t('version.viewForkImages') }}
+                  <Icon name="externalLink" size="xs" :stroke-width="2" />
+                </a>
+                <a v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'" :href="releaseInfo.html_url"
+                  target="_blank" rel="noopener noreferrer" class="block text-center text-xs text-gray-500 dark:text-dark-400">
+                  {{ t('version.viewChangelog') }}
+                </a>
+              </div>
+
               <!-- Priority 3: Update available for source build - show git pull hint -->
               <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
                 <a
@@ -255,7 +270,7 @@
                       {{ t('version.updateAvailable') }}
                     </p>
                     <p class="text-xs text-amber-600/70 dark:text-amber-400/70">
-                      v{{ latestVersion }}
+                      {{ latestVersion }}
                     </p>
                   </div>
                   <svg
@@ -292,7 +307,7 @@
               </div>
 
               <!-- Priority 4: Update available for release build - show update button -->
-              <div v-else-if="hasUpdate && isReleaseBuild" class="space-y-2">
+              <div v-else-if="hasUpdate && canAutoUpdate" class="space-y-2">
                 <!-- Update info card -->
                 <div
                   class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20"
@@ -312,7 +327,7 @@
                       {{ t('version.updateAvailable') }}
                     </p>
                     <p class="text-xs text-amber-600/70 dark:text-amber-400/70">
-                      v{{ latestVersion }}
+                      {{ latestVersion }}
                     </p>
                   </div>
                 </div>
@@ -375,7 +390,7 @@
                 </a>
 
                 <!-- Version rollback entry -->
-                <div class="border-t border-gray-100 pt-2 dark:border-dark-700">
+                <div v-if="appStore.canAutoUpdate !== false" class="border-t border-gray-100 pt-2 dark:border-dark-700">
                   <button
                     @click="toggleRollbackPanel"
                     class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
@@ -506,7 +521,7 @@
                                   ? 'text-amber-700 dark:text-amber-300'
                                   : 'text-gray-700 dark:text-dark-200'
                               "
-                              >v{{ item.version }}</span
+                              >{{ formatVersion(item.version) }}</span
                             >
                           </span>
                           <span class="text-[11px] tabular-nums text-gray-400 dark:text-dark-500">
@@ -613,7 +628,7 @@
                                 rollingBack
                                   ? t('version.rollingBack')
                                   : t('version.rollbackConfirm', {
-                                      version: 'v' + selectedRollbackVersion
+                                      version: formatVersion(selectedRollbackVersion)
                                     })
                               }}</span>
                             </button>
@@ -624,6 +639,7 @@
                   </transition>
                 </div>
               </div>
+              <p v-if="versionWarning" class="mt-3 break-words text-xs text-amber-700 dark:text-amber-400" role="status">{{ versionWarning }}</p>
             </template>
           </div>
         </div>
@@ -632,7 +648,7 @@
 
     <!-- Non-admin: Simple static version text -->
     <span v-else-if="version" class="text-xs text-gray-500 dark:text-dark-400">
-      v{{ version }}
+      {{ formatVersion(version) }}
     </span>
   </div>
 </template>
@@ -649,6 +665,7 @@ import {
   type RollbackVersionInfo
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
+import { FORK_IMAGE_URL, isForkVersion } from '@/utils/version'
 import Icon from '@/components/icons/Icon.vue'
 
 const GITHUB_REPO = 'Wei-Shaw/sub2api'
@@ -671,11 +688,19 @@ const dropdownRef = ref<HTMLElement | null>(null)
 
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
-const currentVersion = computed(() => appStore.currentVersion || props.version || '')
-const latestVersion = computed(() => appStore.latestVersion)
-const hasUpdate = computed(() => appStore.hasUpdate)
-const releaseInfo = computed(() => appStore.releaseInfo)
+const formatVersion = (version: string) => version.trim() ? `v${version.trim().replace(/^v/i, '')}` : ''
+const currentVersion = computed(() => formatVersion(appStore.currentVersion || props.version || ''))
+const latestVersion = computed(() => formatVersion(appStore.latestVersion || ''))
+const hasUpdate = computed(() => !unverifiedFork.value && appStore.hasUpdate)
+const releaseInfo = computed(() => unverifiedFork.value ? null : appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const isForkBuild = computed(() => appStore.updateChannel === 'fork'
+  || isForkVersion(appStore.currentVersion) || isForkVersion(props.version) || isForkVersion(appStore.siteVersion))
+const unverifiedFork = computed(() => isForkBuild.value && appStore.updateChannel !== 'fork')
+const manualUpdateUrl = computed(() => isForkBuild.value ? appStore.manualUpdateUrl || FORK_IMAGE_URL : appStore.manualUpdateUrl)
+const versionWarning = computed(() => appStore.versionWarning || (unverifiedFork.value ? t('version.checkUnavailable') : ''))
+const versionStatus = computed(() => hasUpdate.value ? t('version.updateAvailable')
+  : versionWarning.value ? t('version.checkUnavailable') : t('version.upToDate'))
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -709,7 +734,7 @@ const manualTabs = computed(() => [
 
 const scriptRollbackCommand = computed(() => {
   if (!selectedRollbackVersion.value) return ''
-  const tag = `v${selectedRollbackVersion.value}`
+  const tag = formatVersion(selectedRollbackVersion.value)
   return `curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
 })
 
@@ -717,7 +742,7 @@ const dockerRollbackCommand = computed(() => {
   if (!selectedRollbackVersion.value) return ''
   return [
     `# ${t('version.dockerEditCompose')}`,
-    `image: ${DOCKER_IMAGE}:${selectedRollbackVersion.value}`,
+    `image: ${DOCKER_IMAGE}:${selectedRollbackVersion.value.replace(/^v/i, '')}`,
     '',
     `# ${t('version.dockerRecreate')}`,
     'docker compose up -d'
@@ -730,6 +755,7 @@ const activeManualCommand = computed(() =>
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
+const canAutoUpdate = computed(() => isReleaseBuild.value && !isForkBuild.value && appStore.canAutoUpdate !== false)
 
 function toggleDropdown() {
   dropdownOpen.value = !dropdownOpen.value
@@ -752,7 +778,7 @@ async function refreshVersion(force = true) {
 }
 
 async function handleUpdate() {
-  if (updating.value) return
+  if (!isAdmin.value || !canAutoUpdate.value || updating.value) return
 
   updating.value = true
   updateError.value = ''
@@ -783,7 +809,7 @@ function resetRollbackState() {
 }
 
 async function toggleRollbackPanel() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || isForkBuild.value || appStore.canAutoUpdate === false) return
   rollbackPanelOpen.value = !rollbackPanelOpen.value
   // Source builds only show a hint, no version list to fetch
   if (
@@ -797,7 +823,7 @@ async function toggleRollbackPanel() {
 }
 
 async function loadRollbackVersions() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || !canAutoUpdate.value) return
   rollbackVersionsLoading.value = true
   rollbackVersionsError.value = ''
   try {
@@ -826,7 +852,7 @@ function formatPublishedAt(publishedAt: string): string {
 }
 
 async function handleRollback() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || !canAutoUpdate.value) return
   if (rollingBack.value || !selectedRollbackVersion.value) return
 
   rollingBack.value = true

@@ -4254,6 +4254,7 @@ const withUpstreamRequestIdHeader = <T extends Record<string, unknown> | undefin
 }
 
 const baseUrlHint = computed(() => {
+  if (form.platform === 'typesafe') return t('admin.accounts.typeSafeBaseUrlHint')
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (form.platform === 'grok') return ''
@@ -4261,6 +4262,7 @@ const baseUrlHint = computed(() => {
 })
 
 const apiKeyHint = computed(() => {
+  if (form.platform === 'typesafe') return t('admin.accounts.typeSafeKeyHint')
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
   // Grok 与多协议供应商没有对应的说明文案；通用文案指 Claude Console Key。
@@ -4306,7 +4308,7 @@ const apiKeyValuePlaceholder = computed(() => {
     case 'opencode_go':
       return 'sk-...'
     case 'typesafe':
-      return 'ts-...'
+      return t('admin.accounts.typeSafeKeyPlaceholder')
     default:
       return isMultiProtocolPlatform.value ? 'sk-...' : 'sk-ant-...'
   }
@@ -4321,7 +4323,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
-  created: []
+  created: [accountId?: number]
 }>()
 
 const appStore = useAppStore()
@@ -4396,6 +4398,7 @@ const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
 const upstreamBillingAutoProbeEnabled = ref(true)
+const ordinaryBillingAutoProbeEnabled = ref(true)
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）账号类型、API 协议与端点 ──
 // 多协议供应商（国产厂商与走通用表单的供应商）的接入模式；OpenCode 用 openCodeAccountMode。
@@ -5134,7 +5137,13 @@ watch(
 // Reset platform-specific settings when platform changes
 watch(
   () => form.platform,
-  (newPlatform) => {
+  (newPlatform, oldPlatform) => {
+    if (newPlatform === 'typesafe') {
+      ordinaryBillingAutoProbeEnabled.value = upstreamBillingAutoProbeEnabled.value
+      upstreamBillingAutoProbeEnabled.value = false
+    } else if (oldPlatform === 'typesafe') {
+      upstreamBillingAutoProbeEnabled.value = ordinaryBillingAutoProbeEnabled.value
+    }
     // Reset base URL based on platform
     if (isMultiProtocolApiKeyPlatform(newPlatform)) {
       const mode = newPlatform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
@@ -5564,7 +5573,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
       Object.values(modelMapping).some((target) =>
         typeof target === 'string' && target.trim() !== '' && !target.includes('*')
       )
-    if (upstreamModelsPreviewed.value || hasConcreteMappedTarget) {
+    if (payload.platform !== 'typesafe' && (upstreamModelsPreviewed.value || hasConcreteMappedTarget)) {
       try {
         const result = await adminAPI.accounts.syncUpstreamModels(account.id)
         const warnings = result.warnings ?? []
@@ -5579,7 +5588,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
     }
     if (
       payload.type === 'apikey' &&
-      payload.upstream_billing_probe_enabled === true
+      payload.platform !== 'typesafe' && payload.upstream_billing_probe_enabled === true
     ) {
       try {
         await adminAPI.accounts.probeUpstreamBilling(account.id)
@@ -5588,7 +5597,8 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
       }
     }
     appStore.showSuccess(t('admin.accounts.accountCreated'))
-    emit('created')
+    if (payload.platform === 'typesafe') emit('created', account.id)
+    else emit('created')
     handleClose()
   } catch (error: any) {
     if (error.response?.status === 409 && error.response?.data?.error === 'mixed_channel_warning' && needsMixedChannelCheck(form.platform)) {
@@ -5633,6 +5643,7 @@ const resetForm = () => {
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
+  ordinaryBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null

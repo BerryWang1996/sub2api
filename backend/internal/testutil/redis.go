@@ -19,3 +19,13 @@ func NewRedisGatewayCache(t *testing.T) service.GatewayCache {
 
 	return repository.NewGatewayCache(redisClient)
 }
+
+// NewRedisAIRoutingStore uses the production adapter and an isolated Redis
+// protocol server. The server is exposed only for deterministic fault injection.
+func NewRedisAIRoutingStore(t *testing.T) (service.AIRoutingStore, *miniredis.Miniredis) {
+	t.Helper()
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	return repository.NewAIRoutingStore(client), server
+}

@@ -19,6 +19,9 @@ export interface VersionInfo {
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
+  update_channel?: 'upstream' | 'fork'
+  can_auto_update?: boolean
+  manual_update_url?: string
 }
 
 /**

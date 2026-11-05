@@ -22311,6 +22311,7 @@ type GroupMutation struct {
 	is_exclusive                            *bool
 	status                                  *string
 	duplicate_operation_id                  *string
+	fork_ai_routing                         *bool
 	platform                                *string
 	subscription_type                       *string
 	daily_limit_usd                         *float64
@@ -23096,6 +23097,42 @@ func (m *GroupMutation) DuplicateOperationIDCleared() bool {
 func (m *GroupMutation) ResetDuplicateOperationID() {
 	m.duplicate_operation_id = nil
 	delete(m.clearedFields, group.FieldDuplicateOperationID)
+}
+
+// SetForkAiRouting sets the "fork_ai_routing" field.
+func (m *GroupMutation) SetForkAiRouting(b bool) {
+	m.fork_ai_routing = &b
+}
+
+// ForkAiRouting returns the value of the "fork_ai_routing" field in the mutation.
+func (m *GroupMutation) ForkAiRouting() (r bool, exists bool) {
+	v := m.fork_ai_routing
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldForkAiRouting returns the old "fork_ai_routing" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldForkAiRouting(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldForkAiRouting is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldForkAiRouting requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldForkAiRouting: %w", err)
+	}
+	return oldValue.ForkAiRouting, nil
+}
+
+// ResetForkAiRouting resets all changes to the "fork_ai_routing" field.
+func (m *GroupMutation) ResetForkAiRouting() {
+	m.fork_ai_routing = nil
 }
 
 // SetPlatform sets the "platform" field.
@@ -26209,7 +26246,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 68)
+	fields := make([]string, 0, 69)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -26251,6 +26288,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.duplicate_operation_id != nil {
 		fields = append(fields, group.FieldDuplicateOperationID)
+	}
+	if m.fork_ai_routing != nil {
+		fields = append(fields, group.FieldForkAiRouting)
 	}
 	if m.platform != nil {
 		fields = append(fields, group.FieldPlatform)
@@ -26450,6 +26490,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Status()
 	case group.FieldDuplicateOperationID:
 		return m.DuplicateOperationID()
+	case group.FieldForkAiRouting:
+		return m.ForkAiRouting()
 	case group.FieldPlatform:
 		return m.Platform()
 	case group.FieldSubscriptionType:
@@ -26595,6 +26637,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldStatus(ctx)
 	case group.FieldDuplicateOperationID:
 		return m.OldDuplicateOperationID(ctx)
+	case group.FieldForkAiRouting:
+		return m.OldForkAiRouting(ctx)
 	case group.FieldPlatform:
 		return m.OldPlatform(ctx)
 	case group.FieldSubscriptionType:
@@ -26809,6 +26853,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDuplicateOperationID(v)
+		return nil
+	case group.FieldForkAiRouting:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetForkAiRouting(v)
 		return nil
 	case group.FieldPlatform:
 		v, ok := value.(string)
@@ -27740,6 +27791,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldDuplicateOperationID:
 		m.ResetDuplicateOperationID()
+		return nil
+	case group.FieldForkAiRouting:
+		m.ResetForkAiRouting()
 		return nil
 	case group.FieldPlatform:
 		m.ResetPlatform()

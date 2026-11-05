@@ -13,6 +13,7 @@ import {
   type ReleaseInfo
 } from '@/api/admin/system'
 import { getPublicSettings as fetchPublicSettingsAPI } from '@/api/auth'
+import { FORK_IMAGE_URL, isForkVersion } from '@/utils/version'
 
 export const useAppStore = defineStore('app', () => {
   // ==================== State ====================
@@ -42,6 +43,10 @@ export const useAppStore = defineStore('app', () => {
   const latestVersion = ref<string>('')
   const hasUpdate = ref<boolean>(false)
   const buildType = ref<string>('source')
+  const updateChannel = ref<'upstream' | 'fork'>('upstream')
+  const canAutoUpdate = ref(true)
+  const manualUpdateUrl = ref('')
+  const versionWarning = ref('')
   const releaseInfo = ref<ReleaseInfo | null>(null)
 
   // Auto-incrementing ID for toasts
@@ -248,6 +253,10 @@ export const useAppStore = defineStore('app', () => {
         latest_version: latestVersion.value,
         has_update: hasUpdate.value,
         build_type: buildType.value,
+        update_channel: updateChannel.value,
+        can_auto_update: canAutoUpdate.value,
+        manual_update_url: manualUpdateUrl.value,
+        warning: versionWarning.value || undefined,
         release_info: releaseInfo.value || undefined,
         cached: true
       }
@@ -261,15 +270,43 @@ export const useAppStore = defineStore('app', () => {
     versionLoading.value = true
     try {
       const data = await checkUpdatesAPI(force)
-      currentVersion.value = data.current_version
-      latestVersion.value = data.latest_version
-      hasUpdate.value = data.has_update
-      buildType.value = data.build_type || 'source'
-      releaseInfo.value = data.release_info || null
+      const forkBuild = data.update_channel === 'fork' || isForkVersion(data.current_version) || isForkVersion(siteVersion.value)
+      // Older fork backends checked upstream releases. Their latest version and
+      // changelog are not evidence about the fork's image channel.
+      const unverifiedFork = forkBuild && (data.update_channel !== 'fork' || !isForkVersion(data.latest_version))
+      const info = {
+        ...data,
+        latest_version: unverifiedFork ? data.current_version || siteVersion.value : data.latest_version,
+        has_update: unverifiedFork ? false : data.has_update,
+        build_type: data.build_type || 'source',
+        update_channel: forkBuild ? 'fork' : 'upstream',
+        can_auto_update: !forkBuild && (data.can_auto_update ?? true),
+        manual_update_url: forkBuild ? data.manual_update_url || FORK_IMAGE_URL : data.manual_update_url,
+        warning: data.warning || (unverifiedFork ? i18n.global.t('version.checkUnavailable') : undefined),
+        release_info: unverifiedFork ? undefined : data.release_info
+      } satisfies VersionInfo
+      currentVersion.value = info.current_version
+      latestVersion.value = info.latest_version
+      hasUpdate.value = info.has_update
+      buildType.value = info.build_type
+      updateChannel.value = info.update_channel
+      canAutoUpdate.value = info.can_auto_update
+      manualUpdateUrl.value = info.manual_update_url || ''
+      versionWarning.value = info.warning || ''
+      releaseInfo.value = info.release_info || null
       versionLoaded.value = true
-      return data
+      return info
     } catch (error) {
       console.error('Failed to fetch version:', error)
+      versionWarning.value = i18n.global.t('version.checkUnavailable')
+      if (isForkVersion(currentVersion.value) || isForkVersion(siteVersion.value)) {
+        updateChannel.value = 'fork'
+        canAutoUpdate.value = false
+        manualUpdateUrl.value = FORK_IMAGE_URL
+        hasUpdate.value = false
+        latestVersion.value = currentVersion.value || siteVersion.value
+        releaseInfo.value = null
+      }
       return null
     } finally {
       versionLoading.value = false
@@ -461,6 +498,10 @@ export const useAppStore = defineStore('app', () => {
     latestVersion,
     hasUpdate,
     buildType,
+    updateChannel,
+    canAutoUpdate,
+    manualUpdateUrl,
+    versionWarning,
     releaseInfo,
 
     // Computed

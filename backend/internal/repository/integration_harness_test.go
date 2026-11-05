@@ -77,7 +77,7 @@ func TestMain(m *testing.M) {
 
 	redisContainer, err := tcredis.Run(
 		ctx,
-		redisImageTag,
+		selectDockerImage(ctx, redisImageTag),
 	)
 	if err != nil {
 		log.Printf("failed to start redis container: %v", err)
@@ -150,6 +150,10 @@ func dockerIsAvailable(ctx context.Context) bool {
 //
 //	SUB2API_TEST_POSTGRES_IMAGE=postgres:15-alpine go test -tags integration ./internal/repository/
 func selectDockerImage(ctx context.Context, preferred string) string {
+	if override := strings.TrimSpace(os.Getenv("SUB2API_TEST_REDIS_IMAGE")); override != "" &&
+		strings.HasPrefix(preferred, "redis:") {
+		return override
+	}
 	if override := strings.TrimSpace(os.Getenv("SUB2API_TEST_POSTGRES_IMAGE")); override != "" &&
 		strings.HasPrefix(preferred, "postgres:") {
 		return override

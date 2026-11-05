@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      typeSafeBaseUrlHint: '填写 TypeSafe 服务基址，例如 https://api.typesafe.ai。网关自动追加 /v1/systemone。',
+      typeSafeKeyHint: '填写该 TypeSafe 账号的 API Key，用于 Jev 决策。',
+      typeSafeKeyPlaceholder: 'TypeSafe API Key',
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       createAccount: '添加账号',

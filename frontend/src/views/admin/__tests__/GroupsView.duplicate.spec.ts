@@ -161,6 +161,7 @@ function mountView() {
         DataTable: DataTableStub,
         Pagination: true,
         BaseDialog: BaseDialogStub,
+        AIRoutingDialog: true,
         ConfirmDialog: true,
         EmptyState: true,
         Select: true,
@@ -231,6 +232,37 @@ describe('GroupsView duplicate action', () => {
     wrapper.unmount()
   })
 
+  it('creates an AI group through the normal platform picker and opens its dedicated policy editor', async () => {
+    const ai = {...sourceGroup, id: 44, platform: 'composite' as const, ai_routing:true, status:'inactive' as const}
+    vi.mocked(adminAPI.groups.create).mockResolvedValueOnce(ai)
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+    const platform = wrapper.getComponent('[data-tour="group-form-platform"]')
+    expect(platform.props('options')).toEqual(expect.arrayContaining([expect.objectContaining({value:'ai_routing'})]))
+    platform.vm.$emit('update:modelValue','ai_routing')
+    await wrapper.get('[data-tour="group-form-name"]').setValue('AI')
+    await wrapper.get('form#create-group-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.groups.create).toHaveBeenCalledWith(expect.objectContaining({name:'AI',platform:'composite',ai_routing:true,allow_messages_dispatch:true}))
+    expect(wrapper.findComponent({name:'AIRoutingDialog'}).props('group')).toMatchObject({id:44,ai_routing:true})
+    wrapper.unmount()
+  })
+  it('allows disabling OpenAI Messages execution before creating the AI group', async () => {
+    vi.mocked(adminAPI.groups.create).mockResolvedValueOnce({...sourceGroup, id:45, ai_routing:true})
+    const wrapper=mountView()
+    await flushPromises()
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+    wrapper.getComponent('[data-tour="group-form-platform"]').vm.$emit('update:modelValue','ai_routing')
+    await wrapper.get('[data-tour="group-form-name"]').setValue('AI without OpenAI execution')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="create-messages-dispatch"]').attributes('aria-checked')).toBe('true')
+    await wrapper.get('[data-testid="create-messages-dispatch"]').trigger('click')
+    await wrapper.get('form#create-group-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.groups.create).toHaveBeenLastCalledWith(expect.objectContaining({platform:'composite',ai_routing:true,allow_messages_dispatch:false}))
+    wrapper.unmount()
+  })
   it('hides advanced group actions in simple mode', async () => {
     authState.isSimpleMode = true
     const compositeGroup = { ...sourceGroup, platform: 'composite' }

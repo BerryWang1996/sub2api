@@ -102,8 +102,8 @@ jobs:
           }
 
           # On resume, include the latest fork patches before merging upstream.
-          merge_or_fail origin/main "$(printf 'Merge fork main into upstream sync branch\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>')"
-          merge_or_fail upstream/main "$(printf 'Merge Wei-Shaw/sub2api main (%s)\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' "$upstream_sha")"
+          merge_or_fail origin/main 'Merge fork main into upstream sync branch'
+          merge_or_fail upstream/main "Merge Wei-Shaw/sub2api main ($upstream_sha)"
           git merge-base --is-ancestor origin/main HEAD
           git merge-base --is-ancestor "$upstream_sha" HEAD
           merged_sha="$(git rev-parse HEAD)"
@@ -151,7 +151,6 @@ jobs:
 
           If PR creation is blocked, enable GitHub Actions PR creation through the repository owner's normal approval process or manually open an internal PR from this existing branch. No PAT is required or used by this workflow.
 
-          🤖 Generated with [Claude Code](https://claude.com/claude-code)
           EOF
           if pr_url="$(gh pr create --repo "$repo" --base main --head "$branch" \
             --title "Sync upstream main (${upstream_sha:0:12})" --body-file "$body_file")"; then

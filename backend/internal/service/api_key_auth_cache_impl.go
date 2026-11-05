@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 25 // v25: group image_count_billing switch (per-image billing on image endpoints)
+const apiKeyAuthSnapshotVersion = 26 // v26: group AI routing mode; invalidate snapshots built before its auth projection was complete
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -419,6 +419,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			SupportedModelScopes:            apiKey.Group.SupportedModelScopes,
 			AllowMessagesDispatch:           apiKey.Group.AllowMessagesDispatch,
 			AllowLive:                       apiKey.Group.AllowLive,
+			AIRouting:                       apiKey.Group.AIRouting,
 			ForceOpenAIFast:                 apiKey.Group.ForceOpenAIFast,
 			FreeOpenAIFast:                  apiKey.Group.FreeOpenAIFast,
 			DefaultMappedModel:              apiKey.Group.DefaultMappedModel,
@@ -522,6 +523,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			SupportedModelScopes:            snapshot.Group.SupportedModelScopes,
 			AllowMessagesDispatch:           snapshot.Group.AllowMessagesDispatch,
 			AllowLive:                       snapshot.Group.AllowLive,
+			AIRouting:                       snapshot.Group.AIRouting,
 			ForceOpenAIFast:                 snapshot.Group.ForceOpenAIFast,
 			FreeOpenAIFast:                  snapshot.Group.FreeOpenAIFast,
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,

@@ -136,7 +136,7 @@
             >
           </template>
 
-          <template #cell-platform="{ value }">
+          <template #cell-platform="{ value, row }">
             <span
               :class="[
                 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
@@ -162,7 +162,7 @@
               ]"
             >
               <PlatformIcon :platform="value" size="xs" />
-              {{ t("admin.groups.platforms." + value, platformLabel(value)) }}
+              {{ row.ai_routing ? t("admin.groups.aiRouting.title") : t("admin.groups.platforms." + value, platformLabel(value)) }}
             </span>
           </template>
 
@@ -410,7 +410,7 @@
                 </span>
               </button>
               <button
-                v-if="!authStore.isSimpleMode && row.platform === 'composite'"
+                v-if="!authStore.isSimpleMode && row.platform === 'composite' && !row.ai_routing"
                 data-testid="group-composite-routes"
                 @click="handleCompositeRoutes(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-cyan-600 dark:hover:bg-dark-700 dark:hover:text-cyan-400"
@@ -419,6 +419,12 @@
                 <span class="text-xs">{{
                   t("admin.groups.compositeRoutes.action")
                 }}</span>
+              </button>
+              <button v-if="!authStore.isSimpleMode && row.ai_routing" type="button" data-testid="group-ai-routing"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 hover:text-cyan-600"
+                @click="aiRoutingGroup = row">
+                <Icon name="swap" size="sm" />
+                <span class="text-xs">{{ t('admin.groups.aiRouting.title') }}</span>
               </button>
               <button
                 v-if="!authStore.isSimpleMode"
@@ -514,15 +520,15 @@
             t("admin.groups.form.platform")
           }}</label>
           <Select
-            v-model="createForm.platform"
-            :options="platformOptions"
+            v-model="createPlatformChoice"
+            :options="createPlatformOptions"
             data-tour="group-form-platform"
             @change="createForm.copy_accounts_from_group_ids = []"
           />
-          <p class="input-hint">{{ t("admin.groups.platformHint") }}</p>
+          <p class="input-hint">{{ createForm.ai_routing ? t("admin.groups.aiRouting.createHint") : t("admin.groups.platformHint") }}</p>
         </div>
         <!-- 从分组复制账号 -->
-        <div v-if="!authStore.isSimpleMode && copyAccountsGroupOptions.length > 0">
+        <div v-if="!authStore.isSimpleMode && !createForm.ai_routing && copyAccountsGroupOptions.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.copyAccounts.title") }}
@@ -1643,10 +1649,10 @@
             <label class="text-sm text-gray-600 dark:text-gray-400">{{
               t("admin.groups.openaiMessages.allowDispatch")
             }}</label>
-            <Toggle v-model="createForm.allow_messages_dispatch" />
+            <Toggle v-model="createForm.allow_messages_dispatch" data-testid="create-messages-dispatch" />
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            {{ t("admin.groups.openaiMessages.allowDispatchHint") }}
+            {{ createForm.ai_routing ? t("admin.groups.aiRouting.dispatchHint") : t("admin.groups.openaiMessages.allowDispatchHint") }}
           </p>
 
           <div
@@ -2165,8 +2171,8 @@
             t("admin.groups.form.platform")
           }}</label>
           <Select
-            v-model="editForm.platform"
-            :options="platformOptions"
+            :model-value="editingGroup?.ai_routing ? 'ai_routing' : editForm.platform"
+            :options="createPlatformOptions"
             :disabled="true"
             data-tour="group-form-platform"
           />
@@ -2174,7 +2180,7 @@
         </div>
         <template v-if="!authStore.isSimpleMode">
         <!-- 从分组复制账号（编辑时） -->
-        <div v-if="copyAccountsGroupOptionsForEdit.length > 0">
+        <div v-if="!editingGroup?.ai_routing && copyAccountsGroupOptionsForEdit.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.copyAccounts.title") }}
@@ -2356,7 +2362,8 @@
         </div>
         <div>
           <label class="input-label">{{ t("admin.groups.form.status") }}</label>
-          <Select v-model="editForm.status" :options="editStatusOptions" />
+          <Select v-model="editForm.status" :options="editStatusOptions" :disabled="editingGroup?.ai_routing" />
+          <p v-if="editingGroup?.ai_routing" class="input-hint">{{ t("admin.groups.aiRouting.managedStatus") }}</p>
         </div>
 
         <!-- Subscription Configuration -->
@@ -3310,7 +3317,7 @@
             <Toggle v-model="editForm.allow_messages_dispatch" />
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            {{ t("admin.groups.openaiMessages.allowDispatchHint") }}
+            {{ editingGroup?.ai_routing ? t("admin.groups.aiRouting.dispatchHint") : t("admin.groups.openaiMessages.allowDispatchHint") }}
           </p>
 
           <div
@@ -3915,6 +3922,9 @@
       </template>
     </BaseDialog>
 
+    <AIRoutingDialog v-if="aiRoutingGroup" :key="aiRoutingGroup.id" :group="aiRoutingGroup"
+      @close="aiRoutingGroup = null" @changed="loadGroups" />
+
     <!-- Composite Routes Modal -->
     <BaseDialog
       :show="showCompositeRoutesModal"
@@ -4350,6 +4360,7 @@ import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesMo
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
+import AIRoutingDialog from "@/components/admin/group/AIRoutingDialog.vue";
 import CompositeRouteDestinationField from "@/components/admin/group/CompositeRouteDestinationField.vue";
 import {
   compositeRouteDestination,
@@ -4672,6 +4683,19 @@ const platformOptions = computed(() =>
   ),
 );
 
+const createPlatformOptions = computed(() => authStore.isSimpleMode ? platformOptions.value : [
+  ...platformOptions.value, { value: 'ai_routing', label: t('admin.groups.aiRouting.title') }
+]);
+const createPlatformChoice = computed({
+  get: () => createForm.ai_routing ? 'ai_routing' : createForm.platform,
+  set: (choice: string) => {
+    const enteringAI = choice === 'ai_routing' && !createForm.ai_routing;
+    createForm.ai_routing = choice === 'ai_routing' && !authStore.isSimpleMode;
+    if (enteringAI && createForm.ai_routing) createForm.allow_messages_dispatch = true;
+    createForm.platform = createForm.ai_routing ? 'composite' : choice;
+    createForm.copy_accounts_from_group_ids = [];
+  }
+});
 const platformFilterOptions = computed(() => [
   { value: "", label: t("admin.groups.allPlatforms") },
   ...GROUP_PLATFORM_OPTIONS,
@@ -4890,6 +4914,7 @@ let liveCapabilityRequest: Promise<{
 const showSortModal = ref(false);
 const submitting = ref(false);
 const sortSubmitting = ref(false);
+const aiRoutingGroup = ref<AdminGroup | null>(null);
 const editingGroup = ref<AdminGroup | null>(null);
 const deletingGroup = ref<AdminGroup | null>(null);
 const duplicatingGroupIds = reactive(new Set<number>());
@@ -4996,6 +5021,7 @@ const submitEditAllowlistCustomEntry = () => {
 };
 
 const createForm = reactive({
+  ai_routing: false,
   name: "",
   description: "",
   i18n: {} as GroupI18n,
@@ -5842,6 +5868,7 @@ const closeCreateModal = () => {
   createForm.name = "";
   createForm.description = "";
   createForm.i18n = {};
+  createForm.ai_routing = false;
   createForm.platform = "anthropic";
   createForm.rate_multiplier = 1.0;
   createForm.is_exclusive = false;
@@ -6102,7 +6129,8 @@ const handleCreateGroup = async () => {
           platform: createForm.platform,
         }
       : requestData;
-    await adminAPI.groups.create(payload);
+    const createdGroup = await adminAPI.groups.create(payload);
+    if (createForm.ai_routing && createdGroup) aiRoutingGroup.value = createdGroup;
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
     loadGroups();
@@ -6460,7 +6488,7 @@ const handleUpdateGroup = async () => {
           i18n: editForm.i18n,
         }
       : payload;
-    await adminAPI.groups.update(editingGroup.value.id, requestData);
+    await adminAPI.groups.update(editingGroup.value.id, editingGroup.value.ai_routing ? {...requestData, status: undefined} : requestData);
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
     loadGroups();

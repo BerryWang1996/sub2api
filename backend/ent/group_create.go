@@ -210,6 +210,20 @@ func (_c *GroupCreate) SetNillableDuplicateOperationID(v *string) *GroupCreate {
 	return _c
 }
 
+// SetForkAiRouting sets the "fork_ai_routing" field.
+func (_c *GroupCreate) SetForkAiRouting(v bool) *GroupCreate {
+	_c.mutation.SetForkAiRouting(v)
+	return _c
+}
+
+// SetNillableForkAiRouting sets the "fork_ai_routing" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableForkAiRouting(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetForkAiRouting(*v)
+	}
+	return _c
+}
+
 // SetPlatform sets the "platform" field.
 func (_c *GroupCreate) SetPlatform(v string) *GroupCreate {
 	_c.mutation.SetPlatform(v)
@@ -1099,6 +1113,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.ForkAiRouting(); !ok {
+		v := group.DefaultForkAiRouting
+		_c.mutation.SetForkAiRouting(v)
+	}
 	if _, ok := _c.mutation.Platform(); !ok {
 		v := group.DefaultPlatform
 		_c.mutation.SetPlatform(v)
@@ -1301,6 +1319,9 @@ func (_c *GroupCreate) check() error {
 		if err := group.DuplicateOperationIDValidator(v); err != nil {
 			return &ValidationError{Name: "duplicate_operation_id", err: fmt.Errorf(`ent: validator failed for field "Group.duplicate_operation_id": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.ForkAiRouting(); !ok {
+		return &ValidationError{Name: "fork_ai_routing", err: errors.New(`ent: missing required field "Group.fork_ai_routing"`)}
 	}
 	if _, ok := _c.mutation.Platform(); !ok {
 		return &ValidationError{Name: "platform", err: errors.New(`ent: missing required field "Group.platform"`)}
@@ -1534,6 +1555,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DuplicateOperationID(); ok {
 		_spec.SetField(group.FieldDuplicateOperationID, field.TypeString, value)
 		_node.DuplicateOperationID = &value
+	}
+	if value, ok := _c.mutation.ForkAiRouting(); ok {
+		_spec.SetField(group.FieldForkAiRouting, field.TypeBool, value)
+		_node.ForkAiRouting = value
 	}
 	if value, ok := _c.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
@@ -3003,6 +3028,9 @@ func (u *GroupUpsertOne) UpdateNewValues() *GroupUpsertOne {
 		}
 		if _, exists := u.create.mutation.DuplicateOperationID(); exists {
 			s.SetIgnore(group.FieldDuplicateOperationID)
+		}
+		if _, exists := u.create.mutation.ForkAiRouting(); exists {
+			s.SetIgnore(group.FieldForkAiRouting)
 		}
 	}))
 	return u
@@ -4476,6 +4504,9 @@ func (u *GroupUpsertBulk) UpdateNewValues() *GroupUpsertBulk {
 			}
 			if _, exists := b.mutation.DuplicateOperationID(); exists {
 				s.SetIgnore(group.FieldDuplicateOperationID)
+			}
+			if _, exists := b.mutation.ForkAiRouting(); exists {
+				s.SetIgnore(group.FieldForkAiRouting)
 			}
 		}
 	}))

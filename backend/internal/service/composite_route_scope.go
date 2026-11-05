@@ -16,6 +16,9 @@ type compositeRouteScopeContextKey struct{}
 // authenticated group: all billing, entitlements and policy gates keep that group.
 // Zero destination IDs retain the original composite platform pool.
 type CompositeRouteScope struct {
+	AICandidateID   string
+	ExecutionModel  string
+	BoundAccountID  int64
 	RouteID         int64
 	SourceGroupID   int64
 	TargetGroupID   int64
@@ -138,6 +141,12 @@ func CompositeRouteAccountAllowed(ctx context.Context, account *Account) bool {
 	if account == nil || account.Platform != scope.TargetPlatform {
 		return false
 	}
+	if scope.BoundAccountID != 0 && account.ID != scope.BoundAccountID {
+		return false
+	}
+	if scope.ExecutionModel != "" && (!account.IsModelSupported(scope.ExecutionModel) || account.GetMappedModel(scope.ExecutionModel) != scope.ExecutionModel) {
+		return false
+	}
 	if scope.TargetAccountID != 0 {
 		return scope.TargetGroupID == 0 && account.ID == scope.TargetAccountID
 	}
@@ -222,7 +231,11 @@ func CompositeRouteStickyKey(ctx context.Context, key string) string {
 	if !ok {
 		return key
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d/%d/%d/%d/%s/%s", scope.SourceGroupID, scope.RouteID, scope.TargetGroupID, scope.TargetAccountID, scope.TargetPlatform, scope.PublicModel)))
+	identity := fmt.Sprintf("%d/%d/%d/%d/%s/%s", scope.SourceGroupID, scope.RouteID, scope.TargetGroupID, scope.TargetAccountID, scope.TargetPlatform, scope.PublicModel)
+	if scope.AICandidateID != "" {
+		identity += fmt.Sprintf("/ai/%q/%q", scope.AICandidateID, scope.ExecutionModel)
+	}
+	sum := sha256.Sum256([]byte(identity))
 	prefix := fmt.Sprintf("cr:%x:", sum[:12])
 	if strings.HasPrefix(key, prefix) {
 		return key

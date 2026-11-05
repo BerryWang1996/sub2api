@@ -37,6 +37,11 @@ func WithCompositeRouteDecision(ctx context.Context, decision CompositeRouteDeci
 		return ctx
 	}
 	scope := CompositeRouteScope{SourceGroupID: decision.GroupID, TargetPlatform: decision.TargetPlatform, PublicModel: decision.PublicModel}
+	scope.AICandidateID = decision.AICandidateID
+	scope.BoundAccountID = decision.BoundAccountID
+	if decision.AICandidateID != "" {
+		scope.ExecutionModel = decision.UpstreamModel
+	}
 	if decision.Route != nil {
 		scope.RouteID = decision.Route.ID
 	}
@@ -212,6 +217,8 @@ func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, grou
 		return CompositeRouteDecision{
 			Matched:         true,
 			Source:          source,
+			AICandidateID:   scope.AICandidateID,
+			BoundAccountID:  scope.BoundAccountID,
 			GroupID:         group.ID,
 			PublicModel:     scope.PublicModel,
 			Route:           &CompositeModelRoute{ID: scope.RouteID},

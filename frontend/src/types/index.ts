@@ -575,6 +575,7 @@ export type GroupI18n = Record<string, GroupLocaleText>
 
 // 用户侧接口返回的 name / description 已由后端按请求语言（Accept-Language）选好
 export interface Group {
+  ai_routing?: boolean
   id: number
   name: string
   description: string | null
@@ -810,6 +811,7 @@ export interface UpdateApiKeyRequest {
 }
 
 export interface CreateGroupRequest {
+  ai_routing?: boolean
   name: string
   description?: string | null
   i18n?: GroupI18n

@@ -418,6 +418,39 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     )
   })
 
+  it.each([false, true])('creates a Jev API key without an immediate probe (periodic probe enabled=%s)', async (periodicProbe) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Grok')
+    await selectButtonByText(wrapper, 'TypeSafe / Jev')
+    expect(wrapper.text()).toContain('admin.accounts.typeSafeBaseUrlHint')
+    expect(wrapper.text()).toContain('admin.accounts.typeSafeKeyHint')
+    expect(wrapper.get('[data-testid="upstream-billing-auto-probe"]').attributes('aria-checked')).toBe('false')
+    if (periodicProbe) await wrapper.get('[data-testid="upstream-billing-auto-probe"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('My Jev')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('mock-jev-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'typesafe', type: 'apikey', upstream_billing_probe_enabled: periodicProbe, credentials: expect.objectContaining({
+        base_url: 'https://api.typesafe.ai', api_key: 'mock-jev-key', model_mapping: {'jev-latest':'jev-latest'}
+      })
+    }))
+    expect(probeUpstreamBillingMock).not.toHaveBeenCalled()
+    expect(syncUpstreamModelsMock).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('restores the ordinary platform probe setting after leaving Jev (%s)', async (enabled) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    if (!enabled) await wrapper.get('[data-testid="upstream-billing-auto-probe"]').trigger('click')
+    await selectButtonByText(wrapper, 'TypeSafe / Jev')
+    expect(wrapper.get('[data-testid="upstream-billing-auto-probe"]').attributes('aria-checked')).toBe('false')
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(wrapper.get('[data-testid="upstream-billing-auto-probe"]').attributes('aria-checked')).toBe(String(enabled))
+    wrapper.unmount()
+  })
+
   it('enables upstream billing probes by default for new OpenAI API key accounts', async () => {
     await submitApiKeyAccount('openai')
 

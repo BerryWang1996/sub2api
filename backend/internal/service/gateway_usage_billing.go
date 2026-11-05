@@ -816,7 +816,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		result.UpstreamResponseModel,
 		result.UpstreamResponseModelConflict,
 		result.ImageCount > 0 || result.AudioUsage != nil || result.SearchCount > 0 || result.CacheStorageTokenHours > 0,
-	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
+	); AIRoutingBillingModel(ctx) == "" && responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
 		if identified, responseChannelPriced := s.hasIdentifiedResponseModelPricing(ctx, responseModel, apiKey); identified {
 			responseCost := s.calculateRecordUsageCost(ctx, result, apiKey, responseModel, multiplier, imageMultiplier, pricingAt)
 			baselineChannelPriced := s.resolveChannelPricing(ctx, billingModel, apiKey) != nil
@@ -927,6 +927,9 @@ func (s *GatewayService) recordUsageMultipliers(ctx context.Context, apiKey *API
 
 // recordUsageBillingModel 按计费模型来源、composite 规则与无价兜底确定计费模型。
 func (s *GatewayService) recordUsageBillingModel(ctx context.Context, apiKey *APIKey, result *ForwardResult, fields ChannelUsageFields) string {
+	if model := AIRoutingBillingModel(ctx); model != "" {
+		return model
+	}
 	concreteBillingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
 	billingModel := concreteBillingModel
 	if fields.BillingModelSource == BillingModelSourceChannelMapped && fields.ChannelMappedModel != "" {

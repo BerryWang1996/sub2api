@@ -8,7 +8,7 @@
       data-testid="destination-mode"
       @update:model-value="changeMode($event as CompositeDestinationMode)"
     />
-    <p class="text-xs text-gray-500 dark:text-gray-400">
+    <p v-if="!explicitOnly" class="text-xs text-gray-500 dark:text-gray-400">
       {{ t(`admin.groups.compositeRoutes.destinationHints.${modelValue.mode}`) }}
     </p>
     <template v-if="modelValue.mode !== 'pool'">
@@ -43,7 +43,12 @@
           <span class="text-xs text-gray-500"> · {{ statusLabel(target) }}</span>
         </button>
       </div>
-      <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.groups.compositeRoutes.destinationResultsHint') }}</p>
+      <div v-if="pages > 1" class="flex items-center gap-2 text-xs">
+        <button type="button" class="btn btn-secondary" :disabled="page <= 1 || loading" @click="page--">{{ t('admin.groups.aiRouting.previous') }}</button>
+        {{ page }} / {{ pages }}
+        <button type="button" class="btn btn-secondary" :disabled="page >= pages || loading" @click="page++">{{ t('admin.groups.aiRouting.next') }}</button>
+      </div>
+      <p v-else-if="!explicitOnly" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.groups.compositeRoutes.destinationResultsHint') }}</p>
     </template>
     <p v-if="showValidationError" class="text-xs text-red-600 dark:text-red-400" role="alert" data-testid="destination-validation">
       {{ t('admin.groups.compositeRoutes.destinationRequired') }}
@@ -56,6 +61,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import Select from '@/components/common/Select.vue'
+import { supportsAIDecisionCredential } from './aiRoutingOptions'
 import { useKeyedDebouncedSearch } from '@/composables/useKeyedDebouncedSearch'
 import type { GroupPlatform } from '@/types'
 import {
@@ -78,16 +84,20 @@ const props = defineProps<{
   modelValue: CompositeRouteDestination
   platform: Exclude<GroupPlatform, 'composite'>
   sourceGroupId: number
+  explicitOnly?: boolean
+  decisionEngine?: 'generic' | 'jev'
 }>()
 const emit = defineEmits<{
   (event: 'update:modelValue', value: CompositeRouteDestination): void
 }>()
 const { t } = useI18n()
-const modeOptions = computed(() => (['pool', 'group', 'account'] as const).map(mode => ({
+const modeOptions = computed(() => (['pool', 'group', 'account'] as const).filter(mode => !props.explicitOnly || mode !== 'pool').map(mode => ({
   value: mode,
   label: t(`admin.groups.compositeRoutes.destinationModes.${mode}`)
 })))
 const keyword = ref('')
+const page = ref(1)
+const pages = ref(1)
 const results = ref<TargetOption[]>([])
 // Cache only display metadata, never account credentials or complete API objects.
 const knownTargets = ref<Record<string, TargetOption>>({})
@@ -109,26 +119,28 @@ const statusLabel = (target: TargetOption) => {
 const selectedStatus = computed(() => selectedTarget.value
   ? statusLabel(selectedTarget.value) : t('admin.groups.compositeRoutes.destinationUnknown'))
 
-const searchRunner = useKeyedDebouncedSearch<TargetOption[]>({
+const searchRunner = useKeyedDebouncedSearch<{ options: TargetOption[]; pages: number }>({
   delay: 300,
   search: async (search, { signal }) => {
     const platform = props.platform
     if (props.modelValue.mode === 'group') {
-      const response = await adminAPI.groups.list(1, 50, { platform, search }, { signal })
-      return response.items
+      const response = await adminAPI.groups.list(page.value, 50, { platform, search }, { signal })
+      return { pages: response.pages, options: response.items
         .filter(group => eligibleCompositeTargetGroup(group, platform, props.sourceGroupId))
-        .map(group => ({ id: group.id, name: group.name, status: group.status }))
+        .map(group => ({ id: group.id, name: group.name, status: group.status })) }
     }
-    const response = await adminAPI.accounts.list(1, 50, {
+    const response = await adminAPI.accounts.list(page.value, 50, {
       platform, search, lite: '1', include_scheduler_score: '0'
     }, { signal })
-    return response.items.filter(account => account.platform === platform).map(account => ({
-      id: account.id, name: account.name, status: account.status,
-      schedulable: account.schedulable,
-      reason: account.temp_unschedulable_reason || account.error_message
-    }))
+    return { pages: response.pages, options: response.items.filter(account => account.platform === platform).map(account => {
+      const supported = !props.decisionEngine || supportsAIDecisionCredential(props.decisionEngine, platform, account.type)
+      return { id: account.id, name: account.name, status: account.status,
+        schedulable: account.schedulable !== false && supported,
+        reason: supported ? (account.temp_unschedulable_reason || account.error_message) : t('admin.groups.aiRouting.unsupportedCredential') }
+    }) }
   },
-  onSuccess: (_key, targets) => {
+  onSuccess: (_key, {options: targets, pages: count}) => {
+    pages.value = count || 1
     results.value = targets
     for (const target of targets) knownTargets.value[`${contextKey.value}:${target.id}`] = target
     loading.value = false
@@ -147,11 +159,14 @@ const searchTargets = () => {
   if (loading.value) searchRunner.trigger(contextKey.value, keyword.value.trim())
 }
 watch(contextKey, () => {
+  page.value = 1
+  pages.value = 1
   keyword.value = ''
   showValidationError.value = false
   searchTargets()
 }, { immediate: true })
-watch(keyword, searchTargets)
+watch(keyword, () => { page.value = 1; searchTargets() })
+watch(page, searchTargets)
 watch(selectedId, () => { showValidationError.value = false })
 
 const changeMode = (mode: CompositeDestinationMode) => {

@@ -137,27 +137,27 @@ func stripDollarQuoted(sql string) string {
 	for {
 		start := strings.IndexByte(sql, '$')
 		if start < 0 {
-			b.WriteString(sql)
+			_, _ = b.WriteString(sql)
 			return b.String()
 		}
 		end := strings.IndexByte(sql[start+1:], '$')
 		if end < 0 {
-			b.WriteString(sql)
+			_, _ = b.WriteString(sql)
 			return b.String()
 		}
 		tag := sql[start : start+end+2]
 		if strings.ContainsAny(tag[1:len(tag)-1], " \t\n;()'") {
-			b.WriteString(sql[:start+1])
+			_, _ = b.WriteString(sql[:start+1])
 			sql = sql[start+1:]
 			continue
 		}
 		closeAt := strings.Index(sql[start+len(tag):], tag)
 		if closeAt < 0 {
-			b.WriteString(sql)
+			_, _ = b.WriteString(sql)
 			return b.String()
 		}
-		b.WriteString(sql[:start])
-		b.WriteString(" $BODY$ ")
+		_, _ = b.WriteString(sql[:start])
+		_, _ = b.WriteString(" $BODY$ ")
 		sql = sql[start+len(tag)+closeAt+len(tag):]
 	}
 }

@@ -294,3 +294,30 @@ func TestBuildAccountForCreateAcceptsTypeSafeAPIKeyWithProbeEnabled(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, true, account.Extra[UpstreamBillingProbeEnabledExtraKey])
 }
+
+func TestCreateTypeSafeAccountRequiresExplicitBillingProbeOptIn(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		setting *bool
+		enabled bool
+	}{
+		{name: "omitted"},
+		{name: "disabled", setting: boolPtr(false)},
+		{name: "enabled", setting: boolPtr(true), enabled: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repo := &upstreamBillingProbeAccountRepo{}
+			created, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
+				Name:                 "Jev decision source",
+				Platform:             PlatformTypeSafe,
+				Type:                 AccountTypeAPIKey,
+				Credentials:          map[string]any{"api_key": "ts-test-key"},
+				ProbeEnabled:         testCase.setting,
+				Extra:                map[string]any{UpstreamBillingProbeEnabledExtraKey: true},
+				SkipDefaultGroupBind: true,
+			})
+			require.NoError(t, err)
+			require.Equal(t, testCase.enabled, upstreamBillingProbeEnabled(created))
+		})
+	}
+}

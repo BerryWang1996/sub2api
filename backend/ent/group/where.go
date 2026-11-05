@@ -120,6 +120,11 @@ func DuplicateOperationID(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDuplicateOperationID, v))
 }
 
+// ForkAiRouting applies equality check predicate on the "fork_ai_routing" field. It's identical to ForkAiRoutingEQ.
+func ForkAiRouting(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldForkAiRouting, v))
+}
+
 // Platform applies equality check predicate on the "platform" field. It's identical to PlatformEQ.
 func Platform(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldPlatform, v))
@@ -988,6 +993,16 @@ func DuplicateOperationIDEqualFold(v string) predicate.Group {
 // DuplicateOperationIDContainsFold applies the ContainsFold predicate on the "duplicate_operation_id" field.
 func DuplicateOperationIDContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldDuplicateOperationID, v))
+}
+
+// ForkAiRoutingEQ applies the EQ predicate on the "fork_ai_routing" field.
+func ForkAiRoutingEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldForkAiRouting, v))
+}
+
+// ForkAiRoutingNEQ applies the NEQ predicate on the "fork_ai_routing" field.
+func ForkAiRoutingNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldForkAiRouting, v))
 }
 
 // PlatformEQ applies the EQ predicate on the "platform" field.

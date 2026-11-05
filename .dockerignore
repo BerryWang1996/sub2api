@@ -30,6 +30,8 @@ Thumbs.db
 # Build artifacts
 dist/
 build/
+# Local handoff archives and test evidence are not build inputs.
+/artifacts/
 
 # Node modules (will be installed in container)
 frontend/node_modules/

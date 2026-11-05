@@ -22,6 +22,9 @@ import (
 
 // GroupHandler handles admin group management
 type GroupHandler struct {
+	aiPolicies           *service.AIRoutingPolicyService
+	aiDecider            service.AIModelChooser
+	aiStore              service.AIRoutingStore
 	adminService         service.AdminService
 	dashboardService     *service.DashboardService
 	groupCapacityService *service.GroupCapacityService
@@ -185,6 +188,7 @@ func sanitizeUpdateGroupRequestForSimpleMode(req *UpdateGroupRequest) {
 
 // CreateGroupRequest represents create group request
 type CreateGroupRequest struct {
+	AIRouting                 bool                          `json:"ai_routing"`
 	Name                      string                        `json:"name" binding:"required"`
 	Description               string                        `json:"description"`
 	I18n                      service.GroupI18n             `json:"i18n"` // 名称与描述的界面语言译文
@@ -722,6 +726,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		SupportedModelScopes:            req.SupportedModelScopes,
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowLive:                       req.AllowLive,
+		AIRouting:                       req.AIRouting,
 		ForceOpenAIFast:                 req.ForceOpenAIFast,
 		FreeOpenAIFast:                  req.FreeOpenAIFast,
 		RequireOAuthOnly:                req.RequireOAuthOnly,

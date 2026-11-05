@@ -326,6 +326,8 @@ func TestProtocolRulesWithProtocolSets(t *testing.T) {
 	}
 }
 
+var commandCodeGatewayCatalogFixtureID atomic.Uint64
+
 // 经真实入口验证：目录声明模型支持入站协议时原样直通，不做协议转换。
 func TestCommandCodeGatewayPassesThroughCatalogProtocols(t *testing.T) {
 	type observation struct {
@@ -334,7 +336,8 @@ func TestCommandCodeGatewayPassesThroughCatalogProtocols(t *testing.T) {
 	}
 	forward := func(t *testing.T, ingress routingMatrixIngress, model string, catalog map[string][]string) observation {
 		t.Helper()
-		base := fmt.Sprintf("http://cc-%s-%d.example", strings.ReplaceAll(t.Name(), "/", "-"), time.Now().UnixNano())
+		// Clock reads may repeat on Windows; each fixture needs a distinct cache key.
+		base := fmt.Sprintf("http://cc-%s-%d.example", strings.ReplaceAll(t.Name(), "/", "-"), commandCodeGatewayCatalogFixtureID.Add(1))
 		account := commandCodeTestAccount(12)
 		account.Credentials["api_base_urls"] = map[string]any{
 			APIProtocolChatCompletions: base + "/provider/v1",

@@ -1514,8 +1514,8 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
 const groupOptions = computed(() =>
   groups.value.map((group) => ({
     value: group.id,
-    label: group.name,
-    description: group.description,
+    label: group.ai_routing ? `${group.name} · ${t('admin.groups.aiRouting.title')}` : group.name,
+    description: group.ai_routing ? [group.description, t('admin.groups.aiRouting.keyHint')].filter(Boolean).join(' · ') : group.description,
     rate: group.rate_multiplier,
     userRate: userGroupRates.value[group.id] ?? null,
     peakRateEnabled: group.peak_rate_enabled,

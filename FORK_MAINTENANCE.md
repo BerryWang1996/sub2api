@@ -67,10 +67,20 @@ scripts/fork-sync.sh
 
 ## 手动构建与发布
 
+### 版本规则
+
+版本唯一来源为 `backend/cmd/server/VERSION`，格式为 **`vMAJOR.MINOR.PATCH-barry.N`**。前三段保留上游基线，同一基线下 `N` 是从 1 开始的发布迭代号，按数值递增：`.1 < .2 < .10`。拼写固定为 `barry`。一次迭代中的编辑、构建和测试不另加号；成功发布后，下次开发才递增，不复用已发布标签。
+
+当前开发版本是 **`v0.2.19-barry.2`**。2026-11-05 用户说明服务器运行的是第 1 次迭代；本轮未远程核验或重标记旧镜像。旧的 `barry-YYYYMMDD.N` 镜像和带 commit SHA 的程序版本只作为历史标识保留，不重发旧标签。
+
+源码构建、嵌入程序版本、镜像发布标签与页面显示使用同一版本。发布输入必须与 VERSION 完全一致；`sha-<完整提交 SHA>` 仍作为源码定位标签。更新检查按 fork 渠道读取版本元数据，保留旧格式识别，按上游基线和迭代号比较。fork 页面提供 GHCR 镜像入口，应用内二进制更新和回退被禁用。若只有 GHCR 镜像而没有 GitHub Release 元数据，页面明确提示检查不可用，不能据此断言已是最新；实际发布版本与 digest 以 Fork image 摘要及包页面为准。
+
+### 构建流程
+
 在 **Actions → Fork image → Run workflow**：
 
 - **仅验证**：可选择功能／同步分支，`publish=false`。
-- **发布镜像**：必须选择 `main`，`publish=true`，输入未使用过的标签，如 `barry-20261019.1`。
+- **发布镜像**：必须选择 `main`，`publish=true`，输入与 VERSION 一致且未使用过的标签，下一次为 `v0.2.19-barry.2`。
 
 发布前强制执行：
 
@@ -82,12 +92,14 @@ scripts/fork-sync.sh
 
 测试失败时不会推送镜像。使用 Actions 的临时 `GITHUB_TOKEN` 推送本 fork 的 GHCR 包，不需要 Docker Hub 凭据或私人 PAT。
 
+发布直接为通过 smoke 检查的本地镜像 ID 添加版本和 SHA 标签再推送，不再次构建替代它。随后核对两标签指向同一 digest，并核对该不可变 manifest 的 config digest 与本地镜像 ID 相同。探测旧标签时只有明确不存在才继续，认证、网络或未知错误会停止发布。该流程的版本与发布脚本有离线模拟回归；离线通过不等于 GHCR 实际发布成功。
+
 当前发布目标是 **linux/amd64**。ARM 服务器不能直接使用该镜像；需先扩展多架构验证与发布流程。
 
 镜像地址：
 
 ```text
-ghcr.io/berrywang1996/sub2api:barry-YYYYMMDD.N
+ghcr.io/berrywang1996/sub2api:v0.2.19-barry.2
 ghcr.io/berrywang1996/sub2api:sha-<完整源代码提交SHA>
 ```
 
@@ -96,6 +108,8 @@ ghcr.io/berrywang1996/sub2api:sha-<完整源代码提交SHA>
 首次发布的 GHCR 包可能默认为私有。若希望服务器匿名拉取，在 GitHub 的该包设置中由所有者确认可见性；否则服务器需要具有包读取权限的登录。仓库公开不等于包必然公开。
 
 ## 服务器改用 fork 镜像
+
+以下是通用部署说明；Taom 是会话可能依赖的网关，获准操作时必须按 `artifacts/PROJECT_LOCATION.md` 使用一条 detached 端到端命令，包含代理网络恢复、健康检查、失败回滚及日志，不能照下面的分步命令逐次操作。
 
 先备份数据库及当前部署配置，记录原镜像 digest，并在预发布环境验证。不要改变数据库、Redis、网络或数据卷路径，不要运行 `down -v`。
 
@@ -128,6 +142,10 @@ docker compose -f docker-compose.local.yml -f compose.fork.yml logs --tail=100 s
 ### 回滚
 
 把 `.env` 中的镜像引用改回之前记录的 digest，按相同 Compose 命令只重建应用服务。若回滚到不识别目标 ID 的旧代码，应先停用或调整新规则；旧代码可能忽略目标限制。数据库新增列不要在紧急回滚时随意删除；需要恢复数据库时使用维护窗口和备份。
+
+回滚到不识别 AI 路由的旧版本前，必须先在当前版本停用所有 AI 组，并确认其关联 Key 不能继续使用这些组；旧版本会将其视为静态 Composite，无法保持 AI 策略约束。首次升级时若尚未创建 AI 组，失败可以直接恢复旧应用镜像，保留 `fork_002` 新增表和列，不回删迁移或生产数据。
+
+若目标是会话依赖的 Taom 网关，以上命令仅说明 Compose 操作含义，不能逐条执行。先只读核实实际容器标签中的部署目录、Compose 文件、运行镜像和代理网络；获准升级时用一条 detached 端到端命令完成备份、配置变更、仅重建应用、代理网络恢复、健康检查、失败自动回滚及日志。不得重建数据库/Redis、删除数据卷，或依赖断线后的第二次调用恢复代理。
 
 ## 许可证和对应源码
 

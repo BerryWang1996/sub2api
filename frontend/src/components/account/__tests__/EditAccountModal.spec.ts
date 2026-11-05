@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import {
   BUILTIN_PLATFORM_CATALOG,
   resetPlatformCatalog,
@@ -352,6 +352,21 @@ describe('EditAccountModal', () => {
     expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('modelMappings')).toEqual([
       { from: 'gpt-latest', to: 'deepseek-chat' }
     ])
+  })
+
+  it('retains a Jev API key when its replacement is blank and shows the TypeSafe endpoint', async () => {
+    const account = {...buildAccount(), platform:'typesafe',type:'apikey',credentials:{api_key:'mock-key',base_url:'https://api.typesafe.ai', model_mapping:{'jev-latest':'jev-latest'}}}
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const w = mountModal(account)
+    expect(w.text()).toContain('admin.accounts.typeSafeBaseUrlHint')
+    expect(w.get('input[placeholder="https://api.typesafe.ai"]').element.value).toBe('https://api.typesafe.ai')
+    expect(w.get('input[placeholder="admin.accounts.typeSafeKeyPlaceholder"]').element.value).toBe('')
+    await w.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).toBeDefined()
+    expect(payload.credentials?.api_key ?? 'mock-key').toBe('mock-key')
+    w.unmount()
   })
 
   it('sets expiry presets from now instead of extending the saved expiry', async () => {

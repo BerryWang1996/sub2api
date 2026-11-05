@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"os/exec"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -434,6 +436,21 @@ func attachInflightSnapshot(svc *GatewayService, snap *inflightSnapshotCacheStub
 
 // 已定价模型永不查账号映射；随机未定价模型名不直接查库、不产生按模型名的缓存（内存有界）。
 func TestInflightEstimate_AccountMappingNoDBAndBoundedMemory(t *testing.T) {
+	// HeapAlloc covers the whole process, including background work left by
+	// other service tests. Measure this fixture in an otherwise idle test process.
+	const childMarker = "SUB2API_TEST_INFLIGHT_MEMORY_CHILD"
+	if os.Getenv(childMarker) != "1" {
+		binary, err := os.Executable()
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, binary, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.timeout=45s", "-test.v")
+		cmd.Env = append(os.Environ(), childMarker+"=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "isolated heap measurement failed:\n%s", output)
+		t.Logf("isolated heap measurement:\n%s", output)
+		return
+	}
 	groupID := int64(40)
 	svc := newInflightEstimateGateway(t, nil)
 	snap := &inflightSnapshotCacheStub{byBucket: map[string][]Account{inflightBucketKey(groupID, PlatformAnthropic): {
@@ -459,9 +476,14 @@ func TestInflightEstimate_AccountMappingNoDBAndBoundedMemory(t *testing.T) {
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&after)
+	// Keep any service-owned cache alive through the sample so GC cannot hide
+	// retained per-model state in the object whose memory bound is under test.
+	runtime.KeepAlive(svc)
 	require.Zero(t, repo.dbCalls.Load(), "no direct DB query on the request path")
 	require.Equal(t, int64(n), snap.reads.Load(), "unpriced lookups read the scheduler snapshot only")
-	require.Less(t, int64(after.HeapAlloc)-int64(before.HeapAlloc), int64(8<<20), "no per-model cache growth")
+	growth := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	t.Logf("retained heap growth after %d distinct models: %d bytes", n, growth)
+	require.Less(t, growth, int64(8<<20), "no per-model cache growth")
 }
 
 // 无分组 API Key：使用调度器的未分组账号池，估算与计费回退的账号映射模型同口径。

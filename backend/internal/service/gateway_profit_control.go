@@ -11,6 +11,9 @@ import (
 // token requests. This keeps media, metadata, and models-list paths outside
 // the profit-control surface by construction.
 func (s *GatewayService) withGatewayProfitControlGate(ctx context.Context, groupID *int64) context.Context {
+	if scope, ok := CompositeRouteScopeFromContext(ctx); ok && scope.AICandidateID != "" && scope.TargetGroupID > 0 {
+		groupID = &scope.TargetGroupID
+	}
 	if _, ok := gatewayTokenRequestPricingAtFromContext(ctx); !ok || groupID == nil || *groupID <= 0 {
 		return ctx
 	}

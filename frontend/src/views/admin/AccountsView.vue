@@ -2,6 +2,7 @@
   <AppLayout>
     <TablePageLayout>
       <template #filters>
+        <button v-if="recentlyCreatedId" class="btn btn-secondary" type="button" @click="viewCreatedAccount">{{ t('admin.groups.aiRouting.viewAccount') }} #{{ recentlyCreatedId }}</button>
         <div class="flex flex-wrap-reverse items-start justify-between gap-3">
           <AccountTableFilters
             v-model:searchQuery="params.search"
@@ -454,7 +455,7 @@
       </template>
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
-    <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
+    <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="accountCreated" />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
@@ -1878,6 +1879,21 @@ const loadAccountDetails = async (account: Pick<AccountListItem, 'id'>): Promise
   }
 }
 
+const recentlyCreatedId = ref<number | null>(null)
+const accountCreated = async (id?: number) => {
+  await reload()
+  recentlyCreatedId.value = id && !accounts.value.some(row => row.id === id) ? id : null
+}
+const viewCreatedAccount = async () => {
+  const id = recentlyCreatedId.value
+  if (!id) return
+  const account = await loadAccountDetails({id})
+  if (account) {
+    edAcc.value = account
+    showEdit.value = true
+    recentlyCreatedId.value = null
+  }
+}
 const handleEdit = async (a: AccountListItem) => {
   const account = await loadAccountDetails(a)
   if (!account) return

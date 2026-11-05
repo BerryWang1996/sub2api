@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      typeSafeBaseUrlHint: 'Use the TypeSafe base URL, e.g. https://api.typesafe.ai. The gateway appends /v1/systemone.',
+      typeSafeKeyHint: 'Enter this TypeSafe account’s API key for Jev decisions.',
+      typeSafeKeyPlaceholder: 'TypeSafe API key',
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',

@@ -232,6 +232,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		result.Model,
 	)
 	billingModels = s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, billingModels)
+	aiModel := AIRoutingBillingModel(ctx)
+	if aiModel != "" {
+		billingModels = []string{aiModel}
+	}
 	serviceTier := ""
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
@@ -257,6 +261,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		if !isUsagePricingUnavailableError(err) {
 			return err
 		}
+		if aiModel != "" {
+			return fmt.Errorf("AI execution price unavailable: %w", err)
+		}
 		logger.L().With(
 			zap.String("component", "service.openai_gateway"),
 			zap.Strings("billing_models", billingModels),
@@ -279,7 +286,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		result.UpstreamResponseModelConflict,
 		result.ImageCount > 0 || result.VideoCount > 0 || result.WebSearchCalls > 0 ||
 			result.AudioUsage != nil || result.SearchCount > 0,
-	); responseModel != "" && !strings.EqualFold(responseModel, baselineBillingModel) {
+	); aiModel == "" && responseModel != "" && !strings.EqualFold(responseModel, baselineBillingModel) {
 		if identified, responseChannelPriced := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
 			responseModels := s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, usageBillingModelCandidates(responseModel))
 			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(

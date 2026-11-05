@@ -150,6 +150,49 @@ func TestSystemHandlerPerformUpdateAlreadyUpToDateReturnsOK(t *testing.T) {
 	require.NotEmpty(t, body.Data.OperationID)
 }
 
+func TestSystemHandlerForkUpdateMetadata(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{updateInfo: &service.UpdateInfo{
+		CurrentVersion:  "v0.2.19-barry.2",
+		LatestVersion:   "v0.2.19-barry.10",
+		HasUpdate:       true,
+		UpdateChannel:   "fork",
+		CanAutoUpdate:   false,
+		ManualUpdateURL: "https://github.com/BerryWang1996/sub2api/pkgs/container/sub2api",
+	}}
+	handler := NewSystemHandler(updateSvc, nil)
+	router := gin.New()
+	router.GET("/system/check-updates", handler.CheckUpdates)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/system/check-updates?force=true", nil))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "v0.2.19-barry.2", body.Data["current_version"])
+	require.Equal(t, "fork", body.Data["update_channel"])
+	require.Equal(t, false, body.Data["can_auto_update"])
+	require.Equal(t, updateSvc.updateInfo.ManualUpdateURL, body.Data["manual_update_url"])
+	require.Equal(t, []bool{true}, updateSvc.checkForces)
+}
+
+func TestSystemHandlerForkUpdateRequiresImage(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{performErr: service.ErrForkImageUpdateRequired}
+	router := newSystemHandlerTestRouter(t, updateSvc, newMemoryIdempotencyRepoStub())
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	request.Header.Set("Idempotency-Key", "fork-image-only")
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	var body struct {
+		Message string `json:"message"`
+		Reason  string `json:"reason"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "FORK_IMAGE_UPDATE_REQUIRED", body.Reason)
+	require.Contains(t, body.Message, "GHCR image digest")
+}
+
 func TestSystemHandlerPerformUpdateFailureStillReturnsInternalError(t *testing.T) {
 	updateSvc := &systemHandlerUpdateServiceStub{
 		performErr: errors.New("download failed"),

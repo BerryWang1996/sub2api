@@ -192,6 +192,9 @@ func OpenAIPricingAtFromContext(ctx context.Context) time.Time {
 // （门不存在，全部否决点自动放行，既有行为零变化）。ctx 已有同分组门时直接
 // 复用：同一请求的全部 failover 重入共享同一阈值。
 func (s *OpenAIGatewayService) withOpenAIProfitControlGate(ctx context.Context, groupID *int64) context.Context {
+	if scope, ok := CompositeRouteScopeFromContext(ctx); ok && scope.AICandidateID != "" && scope.TargetGroupID > 0 {
+		groupID = &scope.TargetGroupID
+	}
 	if _, suppressed := ctx.Value(openAIProfitControlSuppressCtxKey{}).(struct{}); suppressed {
 		return ctx
 	}

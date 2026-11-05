@@ -34,6 +34,8 @@ env:
 
 jobs:
   prepare:
+    # This fork publishes through fork-image.yml with its own immutable tags.
+    if: github.repository != 'BerryWang1996/sub2api'
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.plan.outputs.sha }}

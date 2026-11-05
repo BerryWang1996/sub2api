@@ -252,6 +252,9 @@ func (s *adminServiceImpl) requireCompositeGroup(ctx context.Context, groupID in
 	if group.Platform != PlatformComposite {
 		return fmt.Errorf("group %d is not a composite group", groupID)
 	}
+	if group.AIRouting {
+		return aiPolicyError("Configure this group using the AI routing policy")
+	}
 	return nil
 }
 
@@ -427,6 +430,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	platform := NormalizeGroupPlatform(input.Platform)
+	if input.AIRouting && platform != PlatformComposite {
+		return nil, infraerrors.BadRequest("INVALID_AI_ROUTING_GROUP", "AI routing requires a composite group")
+	}
 	// 固定账号 manifest 配置：账号绑定发生在创建之后，创建时无法校验成员关系，
 	// 拒绝开启并在创建后的编辑里配置。
 	if normalizeCodexModelsManifestConfig(platform, input.CodexModelsManifestConfig).Enabled {
@@ -645,6 +651,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		SupportedModelScopes:            input.SupportedModelScopes,
 		AllowMessagesDispatch:           input.AllowMessagesDispatch,
 		AllowLive:                       input.AllowLive,
+		AIRouting:                       input.AIRouting,
 		ForceOpenAIFast:                 input.ForceOpenAIFast,
 		FreeOpenAIFast:                  input.FreeOpenAIFast,
 		RequireOAuthOnly:                input.RequireOAuthOnly,
@@ -666,6 +673,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		group.AllowLive = false
 	}
 	sanitizeGroupReasoningEffortPolicy(group)
+	if group.AIRouting {
+		group.Status = duplicateGroupInactiveStatus
+	}
 	if err := s.groupRepo.Create(ctx, group); err != nil {
 		return nil, err
 	}
@@ -804,6 +814,12 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 
 	// 渠道缓存里存了 groupID → platform 的映射，改了平台要让它失效（见函数末尾）
 	previousPlatform := group.Platform
+	if group.AIRouting && input.Status != "" && input.Status != group.Status {
+		return nil, aiPolicyError("Use AI routing publish/disable to change the group status")
+	}
+	if group.AIRouting && input.Platform != "" && input.Platform != PlatformComposite {
+		return nil, ErrNotAIGroup
+	}
 
 	if input.Name != "" {
 		group.Name = input.Name

@@ -96,6 +96,7 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 	}
 	builder := client.Group.Create().
 		SetName(groupIn.Name).
+		SetForkAiRouting(groupIn.AIRouting).
 		SetDescription(groupIn.Description).
 		SetPlatform(groupIn.Platform).
 		SetRateMultiplier(groupIn.RateMultiplier).
@@ -223,6 +224,15 @@ func (r *groupRepository) CreateFromSource(ctx context.Context, groupIn *service
 	if err := createGroupRecord(ctx, txClient, groupIn); err != nil {
 		return err
 	}
+	if groupIn.AIRouting {
+		// Copy only the draft. Never transfer a live publication or its version.
+		_, err := txClient.ExecContext(ctx, `INSERT INTO fork_ai_routing_policies(group_id,revision,draft)
+			SELECT $2,1,draft || jsonb_build_object('group_id',$2::bigint,'enabled',false,'version',1) FROM fork_ai_routing_policies
+			WHERE group_id=$1`, sourceGroupID, groupIn.ID)
+		if err != nil {
+			return err
+		}
+	}
 	result, err := txClient.ExecContext(
 		ctx,
 		`INSERT INTO account_groups (account_id, group_id, priority, created_at)
@@ -293,7 +303,6 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetPlatform(groupIn.Platform).
 		SetRateMultiplier(groupIn.RateMultiplier).
 		SetIsExclusive(groupIn.IsExclusive).
-		SetStatus(groupIn.Status).
 		SetSubscriptionType(groupIn.SubscriptionType).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
@@ -343,6 +352,9 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetProfitSafetyBuffer(groupIn.ProfitSafetyBuffer)
 
 	// 显式处理可空字段：nil 需要 clear，非 nil 需要 set。
+	if !groupIn.AIRouting {
+		builder.SetStatus(groupIn.Status)
+	}
 	if groupIn.DailyLimitUSD != nil {
 		builder = builder.SetDailyLimitUsd(*groupIn.DailyLimitUSD)
 	} else {

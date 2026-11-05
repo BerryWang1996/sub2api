@@ -359,6 +359,7 @@ func TestAPIContracts(t *testing.T) {
 						"peak_end": "",
 						"peak_rate_multiplier": 1,
 						"is_exclusive": false,
+						"ai_routing": false,
 						"status": "active",
 						"subscription_type": "standard",
 						"daily_limit_usd": null,

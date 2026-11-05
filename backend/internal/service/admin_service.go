@@ -233,6 +233,7 @@ type AdminBoundAuthIdentityChannel struct {
 }
 
 type CreateGroupInput struct {
+	AIRouting                 bool
 	Name                      string
 	Description               string
 	I18n                      GroupI18n // 名称与描述的界面语言译文

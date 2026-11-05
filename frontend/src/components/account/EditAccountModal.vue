@@ -43,7 +43,7 @@
                     ? 'https://cloudcode-pa.googleapis.com'
                     : account.platform === 'grok'
                       ? 'https://api.x.ai/v1'
-                      : 'https://api.anthropic.com'
+                      : account.platform === 'typesafe' ? 'https://api.typesafe.ai' : 'https://api.anthropic.com'
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -244,7 +244,7 @@
                     ? 'sk-...'
                     : account.platform === 'grok'
                       ? 'xai-...'
-                      : 'sk-ant-...'
+                      : account.platform === 'typesafe' ? t('admin.accounts.typeSafeKeyPlaceholder') : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
@@ -3616,6 +3616,7 @@ onMounted(() => {
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
+  if (props.account?.platform === 'typesafe') return t('admin.accounts.typeSafeBaseUrlHint')
   if (!props.account) return t('admin.accounts.baseUrlHint')
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')

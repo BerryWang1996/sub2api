@@ -19,6 +19,9 @@ export default {
 
   // Version Badge
   version: {
+    forkImageHint: 'This fork is published through GHCR images. Verify the target version and image digest, then follow your deployment process to update or roll back.',
+    viewForkImages: 'View fork images',
+    checkUnavailable: 'Latest version has not been confirmed',
     currentVersion: 'Current Version',
     latestVersion: 'Latest Version',
     upToDate: "You're running the latest version.",

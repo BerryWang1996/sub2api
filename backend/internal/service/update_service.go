@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -20,17 +21,21 @@ import (
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"golang.org/x/mod/semver"
 )
 
 var (
 	ErrNoUpdateAvailable         = infraerrors.Conflict("ALREADY_UP_TO_DATE", "no update available; current version is latest")
 	ErrRollbackVersionNotAllowed = infraerrors.BadRequest("ROLLBACK_VERSION_NOT_ALLOWED", "version is not in the allowed rollback list")
+	ErrForkImageUpdateRequired   = infraerrors.Conflict("FORK_IMAGE_UPDATE_REQUIRED", "Update or roll back this fork using a tested GHCR image digest")
 )
 
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
 	githubRepo     = "Wei-Shaw/sub2api"
+	forkGitHubRepo = "BerryWang1996/sub2api"
+	forkPackageURL = "https://github.com/BerryWang1996/sub2api/pkgs/container/sub2api"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -79,13 +84,16 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 
 // UpdateInfo contains update information
 type UpdateInfo struct {
-	CurrentVersion string       `json:"current_version"`
-	LatestVersion  string       `json:"latest_version"`
-	HasUpdate      bool         `json:"has_update"`
-	ReleaseInfo    *ReleaseInfo `json:"release_info,omitempty"`
-	Cached         bool         `json:"cached"`
-	Warning        string       `json:"warning,omitempty"`
-	BuildType      string       `json:"build_type"` // "source" or "release"
+	CurrentVersion  string       `json:"current_version"`
+	LatestVersion   string       `json:"latest_version"`
+	HasUpdate       bool         `json:"has_update"`
+	ReleaseInfo     *ReleaseInfo `json:"release_info,omitempty"`
+	Cached          bool         `json:"cached"`
+	Warning         string       `json:"warning,omitempty"`
+	BuildType       string       `json:"build_type"` // "source" or "release"
+	UpdateChannel   string       `json:"update_channel"`
+	CanAutoUpdate   bool         `json:"can_auto_update"`
+	ManualUpdateURL string       `json:"manual_update_url,omitempty"`
 }
 
 // ReleaseInfo contains GitHub release details
@@ -146,13 +154,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 			cached.Warning = "Using cached data: " + err.Error()
 			return cached, nil
 		}
-		return &UpdateInfo{
-			CurrentVersion: s.currentVersion,
-			LatestVersion:  s.currentVersion,
-			HasUpdate:      false,
-			Warning:        err.Error(),
-			BuildType:      s.buildType,
-		}, nil
+		info := s.newUpdateInfo(s.currentVersion, nil, false)
+		info.Warning = err.Error()
+		return info, nil
 	}
 
 	// Cache result
@@ -163,6 +167,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate downloads and applies the update
 // Uses atomic file replacement pattern for safe in-place updates
 func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+	if isForkVersion(s.currentVersion) {
+		return ErrForkImageUpdateRequired
+	}
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
 		return err
@@ -281,6 +288,9 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 
 // Rollback restores the previous version
 func (s *UpdateService) Rollback() error {
+	if isForkVersion(s.currentVersion) {
+		return ErrForkImageUpdateRequired
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -307,6 +317,9 @@ func (s *UpdateService) Rollback() error {
 // strictly older than the current version (the current version itself is excluded),
 // newest first. Draft and prerelease entries are skipped.
 func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVersion, error) {
+	if isForkVersion(s.currentVersion) {
+		return []RollbackVersion{}, nil
+	}
 	releases, err := s.fetchRollbackCandidates(ctx)
 	if err != nil {
 		return nil, err
@@ -327,6 +340,9 @@ func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVer
 // The target must be one of the versions returned by ListRollbackVersions;
 // anything else (including the current version) is rejected.
 func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) error {
+	if isForkVersion(s.currentVersion) {
+		return ErrForkImageUpdateRequired
+	}
 	target := strings.TrimPrefix(strings.TrimSpace(version), "v")
 	if target == "" {
 		return ErrRollbackVersionNotAllowed
@@ -400,12 +416,18 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 }
 
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	release, err := s.latestRelease(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if release == nil {
+		return nil, fmt.Errorf("no release metadata is available for %s; check the image package for published versions", s.releaseRepository())
+	}
 
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	if isForkVersion(s.currentVersion) {
+		latestVersion = release.TagName
+	}
 
 	assets := make([]Asset, len(release.Assets))
 	for i, a := range release.Assets {
@@ -416,20 +438,66 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 		}
 	}
 
-	return &UpdateInfo{
+	releaseInfo := &ReleaseInfo{
+		Name:        release.Name,
+		Body:        release.Body,
+		PublishedAt: release.PublishedAt,
+		HTMLURL:     release.HTMLURL,
+		Assets:      assets,
+	}
+	if isForkVersion(s.currentVersion) {
+		releaseInfo.Assets = nil
+		releaseInfo.HTMLURL = "https://github.com/" + forkGitHubRepo + "/releases/tag/" + url.PathEscape(release.TagName)
+	}
+	return s.newUpdateInfo(latestVersion, releaseInfo, false), nil
+}
+
+func (s *UpdateService) releaseRepository() string {
+	if isForkVersion(s.currentVersion) {
+		return forkGitHubRepo
+	}
+	return githubRepo
+}
+
+func (s *UpdateService) latestRelease(ctx context.Context) (*GitHubRelease, error) {
+	if !isForkVersion(s.currentVersion) {
+		return s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	}
+	// A fork repository can retain upstream releases. Consider only its own
+	// numbered/date release tags, including GitHub's prerelease-marked entries.
+	releases, err := s.githubClient.FetchRecentReleases(ctx, forkGitHubRepo, 100)
+	if err != nil {
+		return nil, err
+	}
+	var latest *GitHubRelease
+	for _, release := range releases {
+		if release == nil || release.Draft || forkReleaseVersion(release.TagName) == "" {
+			continue
+		}
+		if latest == nil || compareVersions(latest.TagName, release.TagName) < 0 {
+			latest = release
+		}
+	}
+	return latest, nil
+}
+
+func (s *UpdateService) newUpdateInfo(latest string, release *ReleaseInfo, cached bool) *UpdateInfo {
+	info := &UpdateInfo{
 		CurrentVersion: s.currentVersion,
-		LatestVersion:  latestVersion,
-		HasUpdate:      compareVersions(s.currentVersion, latestVersion) < 0,
-		ReleaseInfo: &ReleaseInfo{
-			Name:        release.Name,
-			Body:        release.Body,
-			PublishedAt: release.PublishedAt,
-			HTMLURL:     release.HTMLURL,
-			Assets:      assets,
-		},
-		Cached:    false,
-		BuildType: s.buildType,
-	}, nil
+		LatestVersion:  latest,
+		HasUpdate:      compareVersions(s.currentVersion, latest) < 0,
+		ReleaseInfo:    release,
+		Cached:         cached,
+		BuildType:      s.buildType,
+		UpdateChannel:  "upstream",
+		CanAutoUpdate:  true,
+	}
+	if isForkVersion(s.currentVersion) {
+		info.UpdateChannel = "fork"
+		info.CanAutoUpdate = false
+		info.ManualUpdateURL = forkPackageURL
+	}
+	return info
 }
 
 func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest string) error {
@@ -600,6 +668,7 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	var cached struct {
+		Repository  string       `json:"repository"`
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
@@ -611,23 +680,25 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
 		return nil, fmt.Errorf("cache expired")
 	}
-
-	return &UpdateInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  cached.Latest,
-		HasUpdate:      compareVersions(s.currentVersion, cached.Latest) < 0,
-		ReleaseInfo:    cached.ReleaseInfo,
-		Cached:         true,
-		BuildType:      s.buildType,
-	}, nil
+	// Old cache entries came from upstream. They are usable only by upstream
+	// builds, and a fork must also reject retained upstream tags in its repo.
+	if cached.Repository == "" {
+		cached.Repository = githubRepo
+	}
+	if cached.Repository != s.releaseRepository() || isForkVersion(s.currentVersion) && forkReleaseVersion(cached.Latest) == "" {
+		return nil, fmt.Errorf("update cache belongs to another release channel")
+	}
+	return s.newUpdateInfo(cached.Latest, cached.ReleaseInfo, true), nil
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
+		Repository  string       `json:"repository"`
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
 	}{
+		Repository:  s.releaseRepository(),
 		Latest:      info.LatestVersion,
 		ReleaseInfo: info.ReleaseInfo,
 		Timestamp:   time.Now().Unix(),
@@ -650,7 +721,46 @@ func compareVersions(current, latest string) int {
 			return 1
 		}
 	}
+	if isForkVersion(current) && isForkVersion(latest) {
+		currentRelease, latestRelease := forkReleaseVersion(current), forkReleaseVersion(latest)
+		if currentRelease != "" && latestRelease != "" {
+			return semver.Compare(currentRelease, latestRelease)
+		}
+		// The old embedded suffix was a commit SHA, which has no release
+		// ordering. A numbered release on the same upstream base supersedes it.
+		if currentRelease == "" && latestRelease != "" {
+			return -1
+		}
+		if currentRelease != "" && latestRelease == "" {
+			return 1
+		}
+	}
 	return 0
+}
+
+var numberedForkVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+-barry\.[1-9][0-9]*$`)
+var datedForkVersion = regexp.MustCompile(`^barry-([0-9]{8})\.([0-9]+)$`)
+
+func isForkVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	return strings.Contains(version, "-barry.") || strings.HasPrefix(version, "barry-")
+}
+
+func forkReleaseVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if numberedForkVersion.MatchString(version) {
+		canonical := "v" + strings.TrimPrefix(version, "v")
+		if semver.IsValid(canonical) {
+			return canonical
+		}
+	}
+	if parts := datedForkVersion.FindStringSubmatch(version); parts != nil {
+		canonical := "v0.0.0-barry." + parts[1] + "." + parts[2]
+		if semver.IsValid(canonical) {
+			return canonical
+		}
+	}
+	return ""
 }
 
 func parseVersion(v string) [3]int {

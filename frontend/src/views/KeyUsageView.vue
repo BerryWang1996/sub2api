@@ -537,6 +537,18 @@ const RING_GRADIENTS = [
 
 const ringAnimated = ref(false)
 const displayPcts = ref<number[]>([])
+let ringAnimationFrame: number | null = null
+let ringAnimationTimer: ReturnType<typeof setTimeout> | null = null
+let ringAnimationVersion = 0
+let unmounted = false
+
+function clearRingAnimation() {
+  ringAnimationVersion++
+  if (ringAnimationFrame !== null) cancelAnimationFrame(ringAnimationFrame)
+  if (ringAnimationTimer !== null) clearTimeout(ringAnimationTimer)
+  ringAnimationFrame = null
+  ringAnimationTimer = null
+}
 
 const ringTrackColor = computed(() => isDark.value ? '#222222' : '#F0F0EE')
 
@@ -556,12 +568,16 @@ function getRingOffset(ring: RingItem): number {
 }
 
 function triggerRingAnimation(items: RingItem[]) {
+  if (unmounted) return
+  clearRingAnimation()
+  const version = ringAnimationVersion
   ringAnimated.value = false
   displayPcts.value = items.map(() => 0)
 
   nextTick(() => {
-    requestAnimationFrame(() => {
-      setTimeout(() => {
+    if (version !== ringAnimationVersion) return
+    ringAnimationFrame = requestAnimationFrame(() => {
+      ringAnimationTimer = setTimeout(() => {
         ringAnimated.value = true
 
         // Animate percentage numbers
@@ -574,9 +590,9 @@ function triggerRingAnimation(items: RingItem[]) {
           const p = Math.min(elapsed / duration, 1)
           const ease = 1 - Math.pow(1 - p, 3)
           displayPcts.value = targets.map(target => Math.round(ease * target))
-          if (p < 1) requestAnimationFrame(tick)
+          if (p < 1) ringAnimationFrame = requestAnimationFrame(tick)
         }
-        requestAnimationFrame(tick)
+        ringAnimationFrame = requestAnimationFrame(tick)
       }, 50)
     })
   })
@@ -939,6 +955,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  unmounted = true
+  clearRingAnimation()
   if (resetTimer) clearInterval(resetTimer)
 })
 </script>

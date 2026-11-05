@@ -71,6 +71,9 @@ type CompositeRoutePreviewRequest struct {
 }
 
 type CompositeRouteDecision struct {
+	// AI routing preserves the chosen grant, even across a stateful tool turn.
+	AICandidateID   string               `json:"ai_candidate_id,omitempty"`
+	BoundAccountID  int64                `json:"-"`
 	Matched         bool                 `json:"matched"`
 	Source          string               `json:"source"`
 	GroupID         int64                `json:"group_id"`

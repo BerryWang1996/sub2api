@@ -19,6 +19,9 @@ export default {
 
   // Version Badge
   version: {
+    forkImageHint: '此 fork 通过 GHCR 镜像发布。请核对目标版本和镜像 digest，按部署流程更新或回退。',
+    viewForkImages: '查看 fork 镜像发布',
+    checkUnavailable: '暂未确认最新版本',
     currentVersion: '当前版本',
     latestVersion: '最新版本',
     upToDate: '已是最新版本',

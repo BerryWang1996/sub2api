@@ -783,11 +783,26 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	}
 
 	// RPM 限流：级联回落（Override → Group → User），放在最后以避免为注定失败的请求增加计数。
+	if admission, ok := ctx.Value(aiDecisionAdmissionKey{}).(aiDecisionAdmission); ok && apiKey != nil && group != nil && admission == (aiDecisionAdmission{user.ID, apiKey.ID, group.ID}) {
+		return nil
+	}
 	if err := s.checkRPM(ctx, user, group); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+type aiDecisionAdmissionKey struct{}
+type aiDecisionAdmission struct{ user, key, group int64 }
+
+// AdmitAIRoutingDecision consumes RPM before a paid outbound decision. The
+// execution handler still rechecks balance and target-platform quota.
+func (s *BillingCacheService) AdmitAIRoutingDecision(ctx context.Context, user *User, key *APIKey, group *Group, subscription *UserSubscription) (context.Context, error) {
+	if err := s.CheckBillingEligibility(ctx, user, key, group, subscription, ""); err != nil {
+		return ctx, err
+	}
+	return context.WithValue(ctx, aiDecisionAdmissionKey{}, aiDecisionAdmission{user.ID, key.ID, group.ID}), nil
 }
 
 // ReserveFixedCharge 为扣费前即可确定金额的费用（倍率后 USD，如显式缓存存储费）做准入并登记在途预留。
