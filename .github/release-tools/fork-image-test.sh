@@ -18,8 +18,10 @@ export SOURCE_SHA=0123456789abcdef0123456789abcdef01234567
 export RELEASE_TAG
 RELEASE_TAG=$(sh "$root/backend/scripts/resolve-version.sh" --fork-release-tag)
 export GITHUB_OUTPUT="$temporary_root/output"
-export TESTED_ID="sha256:$(printf '%064d' 1)"
+export CONFIG_DIGEST="sha256:$(printf '%064d' 1)"
+export TESTED_ID="$CONFIG_DIGEST"
 export PUBLISHED_DIGEST="sha256:$(printf '%064d' 2)"
+export OTHER_DIGEST="sha256:$(printf '%064d' 3)"
 
 cat > "$temporary_root/bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -32,7 +34,7 @@ case "$1 $2" in
       printf 'Digest: %s\n' "$PUBLISHED_DIGEST"
     elif [[ -s "$FAKE_DOCKER_STATE" ]]; then
       if [[ "${5:-}" == --raw ]]; then
-        config_digest="$TESTED_ID"
+        config_digest="$CONFIG_DIGEST"
         [[ "${FAKE_MODE:-}" != wrong_config ]] || config_digest="$PUBLISHED_DIGEST"
         printf '{"config":{"digest":"%s"}}\n' "$config_digest"
         exit 0
@@ -40,6 +42,8 @@ case "$1 $2" in
       digest="$PUBLISHED_DIGEST"
       if [[ "${FAKE_MODE:-}" == mismatch && "$4" == *:sha-* ]]; then
         digest="$TESTED_ID"
+      elif [[ "${FAKE_MODE:-}" == containerd_mismatch && "$4" == *:sha-* ]]; then
+        digest="$OTHER_DIGEST"
       fi
       printf 'Name: %s\nDigest: %s\n' "$4" "$digest"
     else
@@ -67,11 +71,12 @@ chmod +x "$temporary_root/bin/docker"
 export PATH="$temporary_root/bin:$PATH"
 [[ "$(command -v docker)" == "$temporary_root/bin/docker" ]] || exit 1
 
-for scenario in missing_manifest missing_404 missing_short; do
+for scenario in missing_manifest missing_404 missing_short containerd_manifest; do
   : > "$FAKE_DOCKER_LOG"
   : > "$FAKE_DOCKER_STATE"
   : > "$GITHUB_OUTPUT"
-  export FAKE_MODE="$scenario"
+  export FAKE_MODE="$scenario" TESTED_ID="$CONFIG_DIGEST"
+  [[ "$scenario" != containerd_manifest ]] || export TESTED_ID="$PUBLISHED_DIGEST"
   bash "$root/.github/release-tools/publish-fork-image.sh" --check-only
   [[ ! -s "$GITHUB_OUTPUT" && ! -s "$FAKE_DOCKER_STATE" ]]
   ! grep -q '^image inspect\|^tag \|^push ' "$FAKE_DOCKER_LOG"
@@ -85,11 +90,13 @@ for scenario in missing_manifest missing_404 missing_short; do
   grep -Fx "buildx imagetools inspect $IMAGE@$PUBLISHED_DIGEST --raw" "$FAKE_DOCKER_LOG" >/dev/null
 done
 
-for scenario in exists mismatch wrong_config wrong_branch disabled auth network unknown; do
+for scenario in exists mismatch wrong_config wrong_identity containerd_mismatch wrong_branch disabled auth network unknown; do
   : > "$FAKE_DOCKER_LOG"
   : > "$FAKE_DOCKER_STATE"
   : > "$GITHUB_OUTPUT"
-  export FAKE_MODE="$scenario" GITHUB_REF=refs/heads/main PUBLISH=true
+  export FAKE_MODE="$scenario" GITHUB_REF=refs/heads/main PUBLISH=true TESTED_ID="$CONFIG_DIGEST"
+  [[ "$scenario" != wrong_identity ]] || export TESTED_ID="$OTHER_DIGEST"
+  [[ "$scenario" != containerd_mismatch ]] || export TESTED_ID="$PUBLISHED_DIGEST"
   [[ "$scenario" != wrong_branch ]] || export GITHUB_REF=refs/heads/feature
   [[ "$scenario" != disabled ]] || export PUBLISH=false
   if bash "$root/.github/release-tools/publish-fork-image.sh" >/dev/null 2>&1; then
@@ -97,7 +104,7 @@ for scenario in exists mismatch wrong_config wrong_branch disabled auth network 
     exit 1
   fi
   [[ ! -s "$GITHUB_OUTPUT" ]]
-  if [[ "$scenario" != mismatch && "$scenario" != wrong_config ]]; then
+  if [[ "$scenario" != mismatch && "$scenario" != wrong_config && "$scenario" != wrong_identity && "$scenario" != containerd_mismatch ]]; then
     ! grep -q '^push ' "$FAKE_DOCKER_LOG"
   fi
 done

@@ -40,5 +40,7 @@ sha_digest=$(awk '$1 == "Digest:" {print $2; exit}' <<< "$sha_manifest")
 # Fetch by immutable digest so a concurrent tag edit cannot change the object
 # used to compare the pushed manifest with the local smoke-tested image.
 config_digest=$(docker buildx imagetools inspect "$IMAGE@$release_digest" --raw | "${PYTHON:-python3}" -c 'import json, sys; print(json.load(sys.stdin)["config"]["digest"])')
-[[ "$config_digest" == "$tested_id" ]] || { echo 'Published manifest does not contain the smoke-tested image' >&2; exit 1; }
+# Classic Docker stores expose the config ID; containerd stores expose the
+# manifest ID. Either identity must match the same immutable published object.
+[[ "$release_digest" == "$tested_id" || "$config_digest" == "$tested_id" ]] || { echo 'Published manifest does not contain the smoke-tested image' >&2; exit 1; }
 printf 'digest=%s\n' "$release_digest" >> "$GITHUB_OUTPUT"
