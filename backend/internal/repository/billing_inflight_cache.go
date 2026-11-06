@@ -29,7 +29,7 @@ func billingInflightKeys(userID int64) (string, string) {
 //   - billing:inflight_scope:{scope}      ZSET  member=requestID score=过期时间(ms)
 //   - billing:inflight_scope_amt:{scope}  HASH  field=requestID value=预留金额(USD)
 //
-// 过期清理与释放语义与余额维度相同，不续期。
+// 过期清理与释放语义与余额维度相同；后台持久预留交接时可显式续期。
 const (
 	billingInflightScopeKeyPrefix    = "billing:inflight_scope:"
 	billingInflightScopeAmtKeyPrefix = "billing:inflight_scope_amt:"
@@ -76,6 +76,10 @@ var (
 	renewInflightBalanceScript = redis.NewScript(`
 		local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
 		if not score then
+			return 0
+		end
+		if redis.call('HEXISTS', KEYS[2], ARGV[1]) == 0 then
+			redis.call('ZREM', KEYS[1], ARGV[1])
 			return 0
 		end
 		if tonumber(score) <= tonumber(ARGV[4]) then
@@ -201,8 +205,17 @@ func (c *billingCache) ReleaseInflightScope(ctx context.Context, scope, requestI
 	return releaseInflightBalanceScript.Run(ctx, c.rdb, []string{zkey, hkey}, requestID).Err()
 }
 
+func (c *billingCache) RenewInflightScope(ctx context.Context, scope, requestID string, ttl time.Duration) (bool, error) {
+	zkey, hkey := billingInflightScopeKeys(scope)
+	ttlMs := max(ttl.Milliseconds(), 1)
+	now := time.Now().UnixMilli()
+	n, err := renewInflightBalanceScript.Run(ctx, c.rdb, []string{zkey, hkey}, requestID, now+ttlMs, ttlMs, now).Int64()
+	return n == 1, err
+}
+
 var (
 	_ service.InflightBalanceReservationCache   = (*billingCache)(nil)
 	_ service.InflightBalanceReservationRenewer = (*billingCache)(nil)
 	_ service.InflightScopeReservationCache     = (*billingCache)(nil)
+	_ service.InflightScopeReservationRenewer   = (*billingCache)(nil)
 )

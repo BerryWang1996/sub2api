@@ -285,7 +285,16 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		}
 		var result *service.ForwardResult
 		setActualUpstreamEndpoint(c, "")
-		if shouldUseAntigravityCompat(account) {
+		if account.Platform == service.PlatformGemini {
+			if h.geminiCompatService == nil {
+				h.responsesErrorResponse(c, http.StatusBadGateway, "upstream_error", "Gemini compatibility service is not configured")
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				return
+			}
+			result, err = h.geminiCompatService.ForwardAsResponses(requestCtx, c, account, forwardBody, parsedReq)
+		} else if shouldUseAntigravityCompat(account) {
 			if h.antigravityGatewayService == nil {
 				h.responsesErrorResponse(c, http.StatusBadGateway, "upstream_error", "Antigravity compatibility service is not configured")
 				if accountReleaseFunc != nil {
@@ -315,6 +324,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			stampForwardRequestedReasoningEffort(result, service.RequestedReasoningEffortFromContext(c.Request.Context()))
+			usageFields := clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -331,7 +341,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 					RequestPayloadHash: requestPayloadHash,
 					APIKeyService:      h.apiKeyService,
 					SessionID:          sessionID,
-					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+					ChannelUsageFields: usageFields,
 				}); err != nil {
 					reqLog.Error("gateway.responses.record_usage_failed",
 						zap.Int64("account_id", account.ID),

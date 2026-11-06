@@ -8,7 +8,7 @@ on:
         type: boolean
         default: false
       release_tag:
-        description: Must match backend/cmd/server/VERSION (for example v0.2.19-barry.2); required to publish
+        description: Must match backend/cmd/server/VERSION (for example v0.2.19-barry.3); required to publish
         type: string
         default: ''
 
@@ -85,7 +85,7 @@ jobs:
         working-directory: backend
         run: |
           go test -race -tags unit ./internal/service ./internal/handler ./internal/repository \
-            -run 'TestCompositeScopeIsolation_|TestGeminiCompositeRoute|TestForwardAsAnthropicTLS|TestForwardCountTokens_NativeAnthropic|TestAIRouting|TestAIDecision|TestAITool' -count=1
+            -run 'TestCompositeScopeIsolation_|TestGeminiCompositeRoute|TestForwardAsAnthropicTLS|TestForwardCountTokens_NativeAnthropic|TestAI|TestHTTPUpstreamAIRouting|TestBackgroundPlatform|TestGeminiResponses|TestGeminiForwardAsResponses' -count=1
       - name: Build embedded Linux application
         working-directory: backend
         env:

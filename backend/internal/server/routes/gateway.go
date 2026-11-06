@@ -168,12 +168,20 @@ func RegisterGatewayRoutes(
 				})
 				return
 			}
+			if rejectUnsupportedAIResponsesInputTokens(c) {
+				return
+			}
 			if service.IsOpenAIResponsesInputTokensRequestPath(c) && isOpenAIResponsesCompatibleGatewayPlatform(c) {
 				h.OpenAIGateway.ResponsesInputTokens(c)
 				return
 			}
 			next(c)
 		}
+	}
+	// AI resource controls are authorized and completed by AIRoute before
+	// platform dispatch. Ordinary groups retain their prior unsupported behavior.
+	responsesResourceUnavailable := func(c *gin.Context) {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Responses resource operation is unavailable"}})
 	}
 
 	// API网关（Claude API兼容）
@@ -230,6 +238,9 @@ func RegisterGatewayRoutes(
 		gateway.GET("/responses", func(c *gin.Context) {
 			h.OpenAIGateway.ResponsesWebSocket(c)
 		})
+		gateway.GET("/responses/:response_id", responsesResourceUnavailable)
+		gateway.GET("/responses/:response_id/input_items", responsesResourceUnavailable)
+		gateway.DELETE("/responses/:response_id", responsesResourceUnavailable)
 		// OpenAI Chat Completions API: auto-route based on group platform
 		gateway.POST("/chat/completions", func(c *gin.Context) {
 			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
@@ -383,6 +394,9 @@ func RegisterGatewayRoutes(
 	rootRoute(http.MethodGet, "/responses", bodyLimit, func(c *gin.Context) {
 		h.OpenAIGateway.ResponsesWebSocket(c)
 	})
+	rootRoute(http.MethodGet, "/responses/:response_id", bodyLimit, responsesResourceUnavailable)
+	rootRoute(http.MethodGet, "/responses/:response_id/input_items", bodyLimit, responsesResourceUnavailable)
+	rootRoute(http.MethodDelete, "/responses/:response_id", bodyLimit, responsesResourceUnavailable)
 	rootRoute(http.MethodGet, "/models", bodyLimit, modelsHandler)
 	rootRoute(http.MethodGet, "/models/:model", bodyLimit, h.Gateway.Models)
 	rootRoute(http.MethodPost, "/messages/count_tokens", bodyLimit, countTokensHandler)
@@ -397,6 +411,9 @@ func RegisterGatewayRoutes(
 		codexDirect.GET("/responses", func(c *gin.Context) {
 			h.OpenAIGateway.ResponsesWebSocket(c)
 		})
+		codexDirect.GET("/responses/:response_id", responsesResourceUnavailable)
+		codexDirect.GET("/responses/:response_id/input_items", responsesResourceUnavailable)
+		codexDirect.DELETE("/responses/:response_id", responsesResourceUnavailable)
 		codexDirect.GET("/models", codexModelsHandler)
 	}
 	// OpenAI Chat Completions API（不带v1前缀的别名）— auto-route based on group platform
@@ -636,6 +653,10 @@ func compositeGeminiTargetPlatformMiddleware(resolver *service.CompositeRouteRes
 		resolver = service.NewCompositeRouteResolver(nil)
 	}
 	return func(c *gin.Context) {
+		if source, _ := service.CompositeRouteSourceFromContext(c.Request.Context()); source == service.CompositeRouteSourceAI {
+			c.Next()
+			return
+		}
 		apiKey, ok := middleware.GetAPIKeyFromContext(c)
 		if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
 			model := compositeGeminiModelFromParams(c)

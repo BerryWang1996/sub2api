@@ -143,14 +143,35 @@ func aiDecisionStreamText(raw []byte) (string, int, int, error) {
 	return readAIDecisionStream(bytes.NewReader(raw))
 }
 
+type aiDecisionStreamResult struct {
+	Text          string
+	InputTokens   int
+	OutputTokens  int
+	ReportedModel string
+	UsageKnown    bool
+}
+
+// Keep the existing text/usage reader API for callers that do not need terminal
+// metering completeness. Missing usage must not be inferred from zero values.
+func readAIDecisionStream(source io.Reader) (string, int, int, error) {
+	result, err := readAIDecisionStreamResult(source)
+	return result.Text, result.InputTokens, result.OutputTokens, err
+}
+
 // A completed Responses event is terminal; waiting for the connection to close
 // needlessly consumes the decision deadline and can discard a valid answer.
-// Count every byte, including comments/blank lines, while retaining metered usage
-// on a failed or interrupted stream. The request context bounds blocked reads.
-func readAIDecisionStream(source io.Reader) (string, int, int, error) {
+// Count every byte, including comments/blank lines, while retaining observed
+// usage on an interrupted stream. Only a terminal response with both explicit,
+// valid usage fields establishes complete metering, independently of selection
+// success. The request context bounds blocked reads.
+func readAIDecisionStreamResult(source io.Reader) (aiDecisionStreamResult, error) {
 	reader := bufio.NewReader(io.LimitReader(source, aiDecisionMaxResponse+1))
-	total, inputTokens, outputTokens := 0, 0, 0
-	fail := func(err error) (string, int, int, error) { return "", inputTokens, outputTokens, err }
+	total := 0
+	var result aiDecisionStreamResult
+	fail := func(err error) (aiDecisionStreamResult, error) {
+		result.Text = ""
+		return result, err
+	}
 	for {
 		raw, readErr := reader.ReadBytes('\n')
 		total += len(raw)
@@ -191,17 +212,33 @@ func readAIDecisionStream(source io.Reader) (string, int, int, error) {
 			if json.Unmarshal(event.Response, &reported) != nil {
 				return fail(errAIDecisionResponse)
 			}
+			for _, count := range []*int{reported.Usage.Input, reported.Usage.Output} {
+				if count != nil && (*count < 0 || *count > 1<<30) {
+					return fail(errAIDecisionResponse)
+				}
+			}
 			if reported.Usage.Input != nil {
-				inputTokens = *reported.Usage.Input
+				result.InputTokens = *reported.Usage.Input
 			}
 			if reported.Usage.Output != nil {
-				outputTokens = *reported.Usage.Output
+				result.OutputTokens = *reported.Usage.Output
+			}
+			switch event.Type {
+			case "response.completed", "response.failed", "response.incomplete":
+				// Do not combine a partial final usage object with earlier progress
+				// fields to fabricate a complete bill. Explicit zero is known usage.
+				result.UsageKnown = reported.Usage.Input != nil && reported.Usage.Output != nil
+				model := gjson.GetBytes(event.Response, "model")
+				if model.Type == gjson.String && len(model.Str) <= 256 {
+					result.ReportedModel = model.Str
+				}
 			}
 		}
 		switch event.Type {
 		case "response.completed":
 			text, _, _, err := aiDecisionResponsesText(event.Response)
-			return text, inputTokens, outputTokens, err
+			result.Text = text
+			return result, err
 		case "error", "response.failed", "response.incomplete", "response.refusal.delta", "response.refusal.done":
 			return fail(errAIDecisionResponse)
 		case "response.output_item.added", "response.output_item.done":

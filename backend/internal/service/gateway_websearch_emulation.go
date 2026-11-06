@@ -169,6 +169,11 @@ func (s *GatewayService) handleWebSearchEmulation(
 func writeEmulatedWebSearch(
 	ctx context.Context, c *gin.Context, account *Account, body []byte, model string, stream bool,
 ) (*ForwardResult, error) {
+	if _, strict := AIRoutingExecutionRequirementsFromContext(ctx); strict {
+		err := &AIRoutingCapacityError{Check: AIRoutingCapabilityCheck{Reason: "execution_capacity_unknown"}}
+		handleAIRoutingCapacityError(c, err)
+		return nil, err
+	}
 	startTime := time.Now()
 
 	query := extractSearchQueryFromBody(body)

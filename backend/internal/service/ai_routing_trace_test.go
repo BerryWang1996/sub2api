@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/stretchr/testify/require"
 )
@@ -52,4 +53,20 @@ func TestAIRoutingTraceWithoutStoreRemainsUnavailable(t *testing.T) {
 	rows, err := ListAIRoutingDecisions(ctx, nil, 5)
 	require.EqualError(t, err, "trace store unavailable")
 	require.Nil(t, rows)
+}
+
+func TestAIRoutingTraceUsesEachReportedModelAndKeepsPartialCostUnknown(t *testing.T) {
+	gateway := &GatewayService{billingService: NewBillingService(&config.Config{}, nil)}
+	actual := gateway.EstimateAIDecisionUSD(AIRoutingDecisionResult{Model: "claude-sonnet-4", InputTokens: 100, OutputTokens: 10})
+	require.NotNil(t, actual)
+	call := AIRoutingDecisionCall{Model: "custom-alias", ReportedModel: "claude-sonnet-4", InputTokens: 100, OutputTokens: 10, UsageKnown: true, Attempted: true}
+	cost := gateway.EstimateAIDecisionUSD(AIRoutingDecisionResult{Calls: []AIRoutingDecisionCall{call, call}})
+	require.NotNil(t, cost)
+	require.InDelta(t, 2**actual, *cost, 1e-12)
+	missing := call
+	missing.UsageKnown = false
+	require.Nil(t, gateway.EstimateAIDecisionUSD(AIRoutingDecisionResult{Calls: []AIRoutingDecisionCall{call, missing}}))
+	missing = call
+	missing.ReportedModel = "unpriced-actual-model"
+	require.Nil(t, gateway.EstimateAIDecisionUSD(AIRoutingDecisionResult{Calls: []AIRoutingDecisionCall{call, missing}}))
 }

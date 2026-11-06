@@ -144,7 +144,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		injectedBody = reconciled
 	}
 
-	injectedBody = ensureGeminiFunctionCallThoughtSignatures(injectedBody)
+	if !HasAIRoutingGeminiNativeState(ctx) {
+		injectedBody = ensureGeminiFunctionCallThoughtSignatures(injectedBody)
+	}
 
 	// 包装请求
 	wrappedBody, err := s.wrapV1InternalRequest(projectID, mappedModel, injectedBody)
@@ -177,6 +179,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	})
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
+		if handleAIRoutingCapacityError(c, err) {
+			return nil, err
+		}
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 			return nil, &UpstreamFailoverError{
 				StatusCode:        http.StatusServiceUnavailable,
@@ -215,6 +220,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
 						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
+						if handleAIRoutingCapacityError(c, err) {
+							return nil, err
+						}
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
@@ -233,7 +241,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		if unwrapped, unwrapErr := s.unwrapV1InternalResponse(respBody); unwrapErr == nil && len(unwrapped) > 0 {
 			signatureCheckBody = unwrapped
 		}
-		if resp.StatusCode == http.StatusBadRequest &&
+		if !HasAIRoutingGeminiNativeState(ctx) && resp.StatusCode == http.StatusBadRequest &&
 			s.settingService != nil &&
 			s.settingService.IsSignatureRectifierEnabled(ctx) &&
 			isSignatureRelatedError(signatureCheckBody) &&
@@ -276,6 +284,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 					groupID:         forwardOpts.groupID,
 					sessionHash:     forwardOpts.sessionHash,
 				})
+				if handleAIRoutingCapacityError(c, retryErr) {
+					return nil, retryErr
+				}
 				if retryErr == nil {
 					retryResp := retryResult.resp
 					if retryResp.StatusCode < 400 {

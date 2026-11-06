@@ -109,8 +109,8 @@ func aiAdminTestHandler() (*GroupHandler, service.AIRoutingPolicy, *aiAdminChoos
 	draft.DecisionModel = "claude-sonnet-4"
 	draft.FallbackID = "b"
 	draft.Candidates = []service.AIRoutingCandidate{
-		{ID: "a", Platform: service.PlatformAnthropic, Model: "claude-sonnet-4", TargetAccountID: &decisionID, Enabled: true},
-		{ID: "b", Platform: service.PlatformAnthropic, Model: "claude-opus-4.5", TargetAccountID: &otherID, Enabled: true},
+		{ID: "a", Platform: service.PlatformAnthropic, Model: "claude-sonnet-4", TargetAccountID: &decisionID, Enabled: true, ContextWindowTokens: 128000},
+		{ID: "b", Platform: service.PlatformAnthropic, Model: "claude-opus-4.5", TargetAccountID: &otherID, Enabled: true, ContextWindowTokens: 128000},
 	}
 	store := &adminAIPolicyStore{state: service.AIRoutingPolicyState{Draft: draft}}
 	chooser := &aiAdminChooser{id: "a"}

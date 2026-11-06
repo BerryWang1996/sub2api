@@ -153,6 +153,11 @@ func groupBillsOpenAIFastAtStandard(apiKey *APIKey, account *Account, serviceTie
 
 // RecordUsage records usage and deducts balance
 func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRecordUsageInput) error {
+	if AIRoutingBackgroundOwnsBilling(ctx) {
+		// Creation may return queued or partial usage. The durable worker owns
+		// one terminal settlement and a recoverable usage row for this task.
+		return nil
+	}
 	if input == nil {
 		return errors.New("openai usage input is nil")
 	}

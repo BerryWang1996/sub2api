@@ -42,6 +42,13 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		}
 	}()
 
+	subscriptionID := int64(0)
+	if cmd.SubscriptionID != nil {
+		subscriptionID = *cmd.SubscriptionID
+	}
+	if err := lockUsageBillingIdentities(ctx, tx, cmd.UserID, subscriptionID, cmd.APIKeyID); err != nil {
+		return nil, err
+	}
 	applied, err := r.claimUsageBillingKey(ctx, tx, cmd)
 	if err != nil {
 		return nil, err
@@ -147,6 +154,9 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 		}
 	}()
 
+	if err := lockUsageBillingIdentities(ctx, tx, cmd.UserID, 0, cmd.APIKeyID); err != nil {
+		return nil, err
+	}
 	applied, err := r.claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
 	if err != nil {
 		return nil, err

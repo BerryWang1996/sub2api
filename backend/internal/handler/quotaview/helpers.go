@@ -15,6 +15,12 @@ func LazyZeroQuotaForResponse(r service.UserPlatformQuotaRecord, now time.Time, 
 	daily := buildWindowSlice(r.DailyUsageUSD, r.DailyLimitUSD, r.DailyWindowStart, NeedsDailyReset(r.DailyWindowStart, now), nextDailyResetTime(now), includeWindowStart)
 	weekly := buildWindowSlice(r.WeeklyUsageUSD, r.WeeklyLimitUSD, r.WeeklyWindowStart, NeedsWeeklyReset(r.WeeklyWindowStart, now), nextWeeklyResetTime(now), includeWindowStart)
 	monthly := buildWindowSlice(r.MonthlyUsageUSD, r.MonthlyLimitUSD, r.MonthlyWindowStart, NeedsMonthlyReset(r.MonthlyWindowStart, now), NextMonthlyResetTimeFrom(r.MonthlyWindowStart, now), includeWindowStart)
+	if r.BackgroundUsage != nil {
+		// The ledger already applied the current/reset window to actual costs.
+		daily.usage += r.BackgroundUsage.DailyUSD - r.BackgroundUsage.PendingUSD
+		weekly.usage += r.BackgroundUsage.WeeklyUSD - r.BackgroundUsage.PendingUSD
+		monthly.usage += r.BackgroundUsage.MonthlyUSD - r.BackgroundUsage.PendingUSD
+	}
 	out := map[string]any{
 		"platform":                 r.Platform,
 		"daily_usage_usd":          daily.usage,
@@ -31,6 +37,30 @@ func LazyZeroQuotaForResponse(r service.UserPlatformQuotaRecord, now time.Time, 
 		out["daily_window_start"] = daily.windowStart
 		out["weekly_window_start"] = weekly.windowStart
 		out["monthly_window_start"] = monthly.windowStart
+	}
+	if r.BackgroundUsage != nil {
+		out["background_reserved_usd"] = r.BackgroundUsage.PendingUSD
+		out["monthly_window_independent"] = r.BackgroundUsage.MonthlyWindowIndependent
+		out["ordinary_monthly_window_resets_at"] = monthly.resetsAt
+		var backgroundMonthReset *string
+		if start := r.BackgroundUsage.MonthlyWindowStart; start != nil {
+			value := start.Add(30 * 24 * time.Hour).Format(time.RFC3339)
+			backgroundMonthReset = &value
+		}
+		out["background_monthly_window_resets_at"] = backgroundMonthReset
+		if r.BackgroundUsage.MonthlyWindowIndependent {
+			// The total includes two independently expiring portions; assigning
+			// either timestamp to the combined amount would promise a false reset.
+			out["monthly_window_resets_at"] = nil
+		} else if backgroundMonthReset != nil {
+			out["monthly_window_resets_at"] = backgroundMonthReset
+		}
+		if r.BackgroundUsage.DailyUSD > r.BackgroundUsage.PendingUSD && daily.resetsAt == nil {
+			out["daily_window_resets_at"] = nextDailyResetTime(now).Format(time.RFC3339)
+		}
+		if r.BackgroundUsage.WeeklyUSD > r.BackgroundUsage.PendingUSD && weekly.resetsAt == nil {
+			out["weekly_window_resets_at"] = nextWeeklyResetTime(now).Format(time.RFC3339)
+		}
 	}
 	return out
 }

@@ -226,31 +226,51 @@ func (r *userPlatformQuotaRepository) IncrementUsageWithReset(ctx context.Contex
 //
 // 未命中活跃记录时返回 ErrUserPlatformQuotaNotFound。
 func (r *userPlatformQuotaRepository) ResetExpiredWindow(ctx context.Context, userID int64, platform string, window string, newStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	upd := client.UserPlatformQuota.Update().
-		Where(
-			userplatformquota.UserIDEQ(userID),
-			userplatformquota.PlatformEQ(platform),
-			userplatformquota.DeletedAtIsNil(),
-		)
-	switch window {
-	case "daily":
-		upd = upd.SetDailyUsageUsd(0).SetDailyWindowStart(newStart)
-	case "weekly":
-		upd = upd.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newStart)
-	case "monthly":
-		upd = upd.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newStart)
-	default:
+	if window != "daily" && window != "weekly" && window != "monthly" {
 		return fmt.Errorf("unknown window %q", window)
 	}
-	n, err := upd.Save(ctx)
-	if err != nil {
+	return r.withTx(ctx, func(txCtx context.Context, client *dbent.Client) error {
+		// Same user-first order as ordinary/background billing. A reset cannot
+		// erase a settlement which occurs after it, including transactions that
+		// began before waiting for this lock.
+		if _, err := client.ExecContext(txCtx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, userID); err != nil {
+			return err
+		}
+		upd := client.UserPlatformQuota.Update().
+			Where(
+				userplatformquota.UserIDEQ(userID),
+				userplatformquota.PlatformEQ(platform),
+				userplatformquota.DeletedAtIsNil(),
+			)
+		switch window {
+		case "daily":
+			upd = upd.SetDailyUsageUsd(0).SetDailyWindowStart(newStart)
+		case "weekly":
+			upd = upd.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newStart)
+		case "monthly":
+			upd = upd.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newStart)
+		default:
+			return fmt.Errorf("unknown window %q", window)
+		}
+		n, err := upd.Save(txCtx)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrUserPlatformQuotaNotFound
+		}
+		// window was allowlisted above; only identifiers are interpolated. The
+		// cutoff uses the DB time after acquiring locks, not the request start time.
+		column := window + "_reset_at"
+		query := `INSERT INTO fork_ai_platform_windows(user_id,platform,` + column + `) VALUES($1,$2,clock_timestamp()) ON CONFLICT(user_id,platform) DO UPDATE SET ` + column + `=EXCLUDED.` + column
+		args := []any{userID, platform}
+		if window == "monthly" {
+			query = `INSERT INTO fork_ai_platform_windows(user_id,platform,monthly_reset_at,monthly_window_start) VALUES($1,$2,clock_timestamp(),$3) ON CONFLICT(user_id,platform) DO UPDATE SET monthly_reset_at=EXCLUDED.monthly_reset_at,monthly_window_start=EXCLUDED.monthly_window_start`
+			args = append(args, newStart)
+		}
+		_, err = client.ExecContext(txCtx, query, args...)
 		return err
-	}
-	if n == 0 {
-		return ErrUserPlatformQuotaNotFound
-	}
-	return nil
+	})
 }
 
 // withTx 在事务中执行 fn，若 ctx 中已有事务则复用。

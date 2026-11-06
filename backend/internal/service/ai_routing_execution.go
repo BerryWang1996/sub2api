@@ -19,12 +19,43 @@ const CompositeRouteSourceAI = "ai"
 var ErrNoAIRoutingCandidate = errors.New("no eligible AI routing candidate")
 
 type AIRoutingRequest struct {
-	PublicModel          string
-	UsesTools, HasImages bool
-	InputBytes           int
-	MaxOutput            int
-	ToolResults          []string
-	Task                 string
+	Endpoint                string
+	Operation               string
+	GeminiAction            string
+	PublicModel             string
+	UsesTools, HasImages    bool
+	InputBytes              int
+	MaxOutput               int
+	OutputChoices           int
+	ToolResults             []string
+	Task                    string
+	InputModalities         []string
+	HistoryBody             []byte               `json:"-"`
+	PreviousResponseID      string               `json:"-"`
+	OriginRefs              []AIRoutingOriginRef `json:"-"`
+	RequiresOrigin          bool
+	RequiresNativeResponses bool
+	RequiresStoredResponses bool
+	RequiresNativeChat      bool
+	RequiresNativeGemini    bool
+	Background              bool
+	StoreResponse           bool
+	Warmup                  bool
+	OutputLimitOmitted      bool
+}
+
+// Origin references stay request-local and never enter decision evidence.
+type AIRoutingOriginRef struct {
+	Kind           string
+	ID             string
+	RequiresStored bool
+}
+
+func (r AIRoutingRequest) ClientEndpoint() string {
+	if r.Endpoint == "" {
+		return CompositeRouteEndpointMessages
+	}
+	return r.Endpoint
 }
 
 var aiSecret = regexp.MustCompile(`(?i)(bearer\s+\S+|(?:sk-|ts-|ghp_|github_pat_|AKIA)[a-z0-9_-]{12,}|(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*["']?[^\s"']+)`)
@@ -60,6 +91,12 @@ func NewAIRoutingRequest(body []byte, mode string) (AIRoutingRequest, error) {
 	}
 	req.PublicModel = model.Str
 	req.InputBytes = len(body)
+	req.InputModalities = []string{"text"}
+	if mode == "bounded_history" {
+		// The execution body remains untouched; this request-local copy is only
+		// parsed for decision evidence after provenance and candidate admission.
+		req.HistoryBody = append([]byte(nil), body...)
+	}
 	req.MaxOutput = int(root.Get("max_tokens").Int())
 	req.UsesTools = root.Get("tools.#").Int() > 0
 	var latestText strings.Builder
@@ -107,6 +144,7 @@ func NewAIRoutingRequest(body []byte, mode string) (AIRoutingRequest, error) {
 				}
 			case "image", "document":
 				req.HasImages = true
+				req.addInputModality(b.Get("type").Str)
 			case "tool_use":
 				req.UsesTools = true
 			case "tool_result":
@@ -136,6 +174,7 @@ func NewAIRoutingRequest(body []byte, mode string) (AIRoutingRequest, error) {
 					}
 					if t := part.Get("type").Str; t == "image" || t == "document" {
 						req.HasImages = true
+						req.addInputModality(t)
 					}
 					return true
 				})
@@ -161,6 +200,15 @@ func NewAIRoutingRequest(body []byte, mode string) (AIRoutingRequest, error) {
 	encoded, _ := json.Marshal(state)
 	req.Task = string(encoded)
 	return req, nil
+}
+
+func (r *AIRoutingRequest) addInputModality(modality string) {
+	for _, existing := range r.InputModalities {
+		if existing == modality {
+			return
+		}
+	}
+	r.InputModalities = append(r.InputModalities, modality)
 }
 
 // Go's JSON struct decoder folds field names; gjson does not. Reject ambiguous
@@ -205,24 +253,33 @@ func (c AIRoutingCandidate) executionDecision(groupID int64, alias, endpoint str
 	return CompositeRouteDecision{Matched: true, Source: CompositeRouteSourceAI, AICandidateID: c.ID, GroupID: groupID, PublicModel: alias, Endpoint: endpoint, TargetPlatform: c.Platform, UpstreamModel: c.Model, TargetGroupID: c.TargetGroupID, TargetAccountID: c.TargetAccountID, BoundAccountID: bound}
 }
 
-func (c AIRoutingCandidate) supportsAIRequest(r AIRoutingRequest) bool {
+func (c AIRoutingCandidate) supportsAIRequest(r AIRoutingRequest, countOnly bool) bool {
 	// Byte length is a conservative bound when a candidate has a hard input
 	// limit and no local tokenizer; do not estimate a multimodal token budget.
-	return c.Enabled && (!r.UsesTools || !c.DisableTools) && (!r.HasImages || !c.DisableImages) &&
+	if !c.Enabled || (r.UsesTools && c.DisableTools) || (r.HasImages && c.DisableImages) {
+		return false
+	}
+	// Counting has no generation reserve and can inspect an over-window input.
+	// Keep prior policy modes' admission unchanged while enabling the new mode.
+	return countOnly ||
 		(c.MaxInputTokens == 0 || (!r.HasImages && r.InputBytes <= c.MaxInputTokens)) &&
-		(c.MaxOutputTokens == 0 || (r.MaxOutput > 0 && r.MaxOutput <= c.MaxOutputTokens))
+			(c.MaxOutputTokens == 0 || r.Operation != "" || r.Warmup || r.OutputLimitOmitted || (r.MaxOutput > 0 && r.MaxOutput <= c.MaxOutputTokens))
 }
 
 func (s *GatewayService) EligibleAIRoutingCandidates(ctx context.Context, key *APIKey, p *AIRoutingPolicy, r AIRoutingRequest, endpoint string, bound int64) []AIRoutingCandidate {
-	if key == nil || key.Group == nil || p == nil || key.Group.ID != p.GroupID {
+	if key == nil || key.Group == nil || p == nil || key.Group.ID != p.GroupID || !p.AllowsEndpoint(endpoint) {
 		return nil
 	}
 	candidates := make([]AIRoutingCandidate, 0, len(p.Candidates))
 	for _, c := range p.Candidates {
-		if c.Platform == PlatformOpenAI && !key.Group.AllowMessagesDispatch {
+		if r.Operation == AIRoutingResponsesInputTokens && !domain.UsesOpenAIGateway(c.Platform) {
+			continue // Only these accounts have a Responses count handler.
+		}
+		if (endpoint == CompositeRouteEndpointMessages || endpoint == CompositeRouteEndpointCountTokens) && c.Platform == PlatformOpenAI && !key.Group.AllowMessagesDispatch {
 			continue
 		}
-		if !c.supportsAIRequest(r) || !aiRoutingModelProducesText(c.Model) || !isConcreteRequestPlatform(c.Platform) || c.Platform == PlatformTypeSafe {
+		countOnly := p.ContextMode == "bounded_history" && endpoint == CompositeRouteEndpointCountTokens || r.Operation == AIRoutingResponsesInputTokens || r.Operation == AIRoutingGeminiCountTokens
+		if !c.supportsAIRequest(r, countOnly) || !aiRoutingModelProducesText(c.Model) || !isConcreteRequestPlatform(c.Platform) || c.Platform == PlatformTypeSafe {
 			continue
 		}
 		if c.Platform != PlatformAnthropic && c.Platform != PlatformAntigravity && c.Platform != PlatformGemini && !domain.UsesOpenAIGateway(c.Platform) {
@@ -233,9 +290,12 @@ func (s *GatewayService) EligibleAIRoutingCandidates(ctx context.Context, key *A
 		}
 		d := c.executionDecision(p.GroupID, r.PublicModel, endpoint, bound)
 		scoped := WithCompositeRouteDecision(ctx, d)
+		if (p.ContextMode == "bounded_history" && endpoint == CompositeRouteEndpointMessages) || endpoint == CompositeRouteEndpointResponses || endpoint == CompositeRouteEndpointChatCompletions || endpoint == AIRoutingEndpointResponsesWS || endpoint == CompositeRouteEndpointGemini {
+			scoped = WithAIRoutingExecutionRequirements(scoped, AIRoutingRequirementsForCandidate(r, c))
+		}
 		// Token requests use the source group's billing multiplier when the
 		// destination pool has an active account profit threshold.
-		if endpoint == CompositeRouteEndpointMessages && c.TargetGroupID != nil {
+		if !countOnly && c.TargetGroupID != nil {
 			scoped, _ = WithGatewayTokenRequestPricing(s.withGroupContext(scoped, key.Group))
 			scoped = s.withGatewayProfitControlGate(scoped, c.TargetGroupID)
 		}
@@ -245,7 +305,7 @@ func (s *GatewayService) EligibleAIRoutingCandidates(ctx context.Context, key *A
 		if s.IsModelRestricted(scoped, p.GroupID, c.Model) {
 			continue
 		}
-		if ok, _ := s.hasIdentifiedResponseModelPricing(scoped, c.Model, key); !ok {
+		if ok, _ := s.hasIdentifiedResponseModelPricing(scoped, c.Model, key); !ok && !countOnly {
 			continue
 		}
 		accounts, handled, err := ListCompositeRouteScopedAccounts(scoped, s.groupRepo, s.accountRepo, c.Platform)
@@ -254,10 +314,32 @@ func (s *GatewayService) EligibleAIRoutingCandidates(ctx context.Context, key *A
 		}
 		for i := range accounts {
 			a := &accounts[i]
+			if r.Operation == AIRoutingGeminiCountTokens && a.Platform != PlatformGemini {
+				continue // Other native/bridge paths do not offer authoritative Gemini counting.
+			}
+			if r.RequiresNativeGemini && !AIRoutingAccountSupportsNativeGemini(a, c.Model) {
+				continue
+			}
+			if endpoint == AIRoutingEndpointResponsesWS && r.RequiresNativeResponses && NewOpenAIWSProtocolResolver(s.cfg).Resolve(a).Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+				continue
+			}
+			if r.RequiresNativeChat && !AIRoutingAccountSupportsNativeChat(a, c.Model) {
+				continue
+			}
+			if r.RequiresNativeResponses && !AIRoutingAccountSupportsNativeResponses(a, c.Model) {
+				continue
+			}
+			if r.RequiresStoredResponses && !AIRoutingAccountSupportsStoredResponses(a, c.Model) {
+				continue
+			}
 			if !a.IsSchedulable() || !CompositeRouteAccountAllowed(scoped, a) || a.isModelRateLimitedWithContext(scoped, c.Model) || !s.isGatewayAccountProfitEligible(scoped, a) {
 				continue
 			}
-			if domain.UsesOpenAIGateway(c.Platform) && !isOpenAICompatibleAccountEligibleForRequest(scoped, a, c.Platform, c.Model, false, OpenAIEndpointCapabilityChatCompletions) {
+			capability := OpenAIEndpointCapabilityChatCompletions
+			if r.RequiresNativeResponses {
+				capability = OpenAIEndpointCapabilityResponses
+			}
+			if domain.UsesOpenAIGateway(c.Platform) && !isOpenAICompatibleAccountEligibleForRequest(scoped, a, c.Platform, c.Model, false, capability) {
 				continue
 			}
 			if key.Group.RequirePrivacySet && !a.IsPrivacySet() {
@@ -280,6 +362,9 @@ type AIModelChooser interface {
 func ChooseAIRoutingCandidate(ctx context.Context, p *AIRoutingPolicy, r AIRoutingRequest, eligible []AIRoutingCandidate, chooser AIModelChooser, host string) (AIRoutingCandidate, AIRoutingDecisionResult, string, error) {
 	var empty AIRoutingCandidate
 	var result AIRoutingDecisionResult
+	if err := ctx.Err(); err != nil {
+		return empty, result, "cancelled", err
+	}
 	if len(eligible) == 0 {
 		return empty, result, "empty", ErrNoAIRoutingCandidate
 	}
@@ -288,12 +373,20 @@ func ChooseAIRoutingCandidate(ctx context.Context, p *AIRoutingPolicy, r AIRouti
 	}
 	var err error
 	if chooser != nil {
-		result, err = chooser.Decide(ctx, p, r.Task, eligible, host)
+		if p != nil && p.ContextMode == "bounded_history" {
+			result, err = chooseAIRoutingHistory(ctx, p, r, eligible, chooser, host)
+		} else {
+			result, err = chooser.Decide(ctx, p, r.Task, eligible, host)
+		}
 	} else {
 		err = errors.New("decision service unavailable")
 	}
 	if ctx.Err() != nil {
 		return empty, result, "cancelled", ctx.Err()
+	}
+	if errors.Is(err, ErrAIRoutingDecisionRevoked) {
+		result.FailureReason = "ai_policy_changed"
+		return empty, result, "rejected", err
 	}
 	if err == nil {
 		for _, candidate := range eligible {

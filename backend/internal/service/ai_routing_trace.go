@@ -12,22 +12,26 @@ import (
 // Operational history, scoped to the source group and readable only by admins.
 // Never include prompts, task text, credentials, or remote error bodies.
 type AIRoutingTrace struct {
-	At                time.Time `json:"at"`
-	RequestID         string    `json:"request_id"`
-	ClientRequestID   string    `json:"client_request_id,omitempty"`
-	UsageRequestID    string    `json:"usage_request_id,omitempty"`
-	PublicModel       string    `json:"public_model"`
-	CandidateID       string    `json:"candidate_id"`
-	ExecutionModel    string    `json:"execution_model"`
-	DecisionModel     string    `json:"decision_model"`
-	DecisionAccountID int64     `json:"decision_account_id"`
-	InputTokens       int       `json:"input_tokens"`
-	OutputTokens      int       `json:"output_tokens"`
-	DecisionCostUSD   *float64  `json:"decision_cost_usd,omitempty"`
-	LatencyMS         int64     `json:"latency_ms"`
-	Source            string    `json:"source"`
-	FailureReason     string    `json:"failure_reason,omitempty"`
-	PolicyVersion     int64     `json:"policy_version"`
+	Endpoint          string                       `json:"endpoint,omitempty"`
+	At                time.Time                    `json:"at"`
+	RequestID         string                       `json:"request_id"`
+	ClientRequestID   string                       `json:"client_request_id,omitempty"`
+	UsageRequestID    string                       `json:"usage_request_id,omitempty"`
+	PublicModel       string                       `json:"public_model"`
+	CandidateID       string                       `json:"candidate_id"`
+	ExecutionModel    string                       `json:"execution_model"`
+	DecisionModel     string                       `json:"decision_model"`
+	DecisionAccountID int64                        `json:"decision_account_id"`
+	InputTokens       int                          `json:"input_tokens"`
+	OutputTokens      int                          `json:"output_tokens"`
+	DecisionCostUSD   *float64                     `json:"decision_cost_usd,omitempty"`
+	LatencyMS         int64                        `json:"latency_ms"`
+	Source            string                       `json:"source"`
+	FailureReason     string                       `json:"failure_reason,omitempty"`
+	PolicyVersion     int64                        `json:"policy_version"`
+	Context           *AIRoutingHistoryDiagnostics `json:"context,omitempty"`
+	DecisionCalls     int                          `json:"decision_calls"`
+	Stages            []AIRoutingDecisionCall      `json:"stages,omitempty"`
 }
 
 // SetRequestContext retains the operational request ID and also records the
@@ -61,6 +65,27 @@ func ListAIRoutingDecisions(ctx context.Context, store AIRoutingStore, id int64)
 
 // Catalog estimate at unit multiplier for operator visibility; never debited to the caller.
 func (s *GatewayService) EstimateAIDecisionUSD(result AIRoutingDecisionResult) *float64 {
+	if len(result.Calls) > 0 {
+		total := float64(0)
+		for _, call := range result.Calls {
+			if !call.Attempted {
+				continue
+			}
+			if !call.UsageKnown {
+				return nil
+			}
+			model := call.Model
+			if call.ReportedModel != "" {
+				model = call.ReportedModel
+			}
+			cost := s.EstimateAIDecisionUSD(AIRoutingDecisionResult{Model: model, InputTokens: call.InputTokens, OutputTokens: call.OutputTokens})
+			if cost == nil {
+				return nil
+			}
+			total += *cost
+		}
+		return &total
+	}
 	if s == nil || s.billingService == nil || (result.InputTokens == 0 && result.OutputTokens == 0) || !s.billingService.HasIdentifiedTokenPricing(result.Model) {
 		return nil
 	}

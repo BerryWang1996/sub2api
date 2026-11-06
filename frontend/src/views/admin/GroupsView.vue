@@ -421,10 +421,10 @@
                 }}</span>
               </button>
               <button v-if="!authStore.isSimpleMode && row.ai_routing" type="button" data-testid="group-ai-routing"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 hover:text-cyan-600"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-cyan-600 dark:hover:bg-dark-700 dark:hover:text-cyan-400"
                 @click="aiRoutingGroup = row">
                 <Icon name="swap" size="sm" />
-                <span class="text-xs">{{ t('admin.groups.aiRouting.title') }}</span>
+                <span class="text-xs">{{ t('admin.groups.compositeRoutes.action') }}</span>
               </button>
               <button
                 v-if="!authStore.isSimpleMode"

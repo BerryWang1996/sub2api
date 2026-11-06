@@ -234,6 +234,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	}
 
 	scan := s.scanCCStream(c, resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) {
+
 		events := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
 		s.cacheReasoningItemsFromEvents(events)
 		writeEvents(events)
@@ -302,6 +303,19 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		Duration:                    time.Since(startTime),
 		FirstTokenMs:                scan.FirstTokenMs,
 	}, nil
+}
+
+// Legacy compatibility keeps its established EOF behavior. AI routing must
+// prove an actual protocol terminal before publishing completion/origins.
+func aiStrictChatTerminal(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if _, ok := AIRoutingExecutionRequirementsFromContext(c.Request.Context()); ok {
+		return true
+	}
+	scope, ok := CompositeRouteScopeFromContext(c.Request.Context())
+	return ok && scope.AICandidateID != ""
 }
 
 func chatChunkStartsResponsesOutput(chunk *apicompat.ChatCompletionsChunk) bool {

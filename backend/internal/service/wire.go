@@ -833,8 +833,13 @@ func ProvideBillingCacheService(
 	rateRepo UserGroupRateRepository,
 	cfg *config.Config,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	backgroundRepo AIRoutingBackgroundRepository,
 ) *BillingCacheService {
-	return NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo)
+	svc := NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo)
+	// Closing new background submission must not hide existing durable holds
+	// or settled platform contributions from ordinary consumption.
+	svc.SetBackgroundReservations(backgroundRepo)
+	return svc
 }
 
 // ProvideAPIKeyService wires APIKeyService and connects rate-limit cache invalidation.
@@ -855,6 +860,15 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideAIRoutingResponsesBackgroundService(repo AIRoutingBackgroundRepository, gateway *OpenAIGatewayService) *AIRoutingResponsesBackgroundService {
+	if !AIRoutingBackgroundReleased() {
+		return nil
+	}
+	svc := NewAIRoutingResponsesBackgroundService(repo, gateway)
+	svc.Start(context.Background())
+	return svc
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -868,6 +882,7 @@ var ProviderSet = wire.NewSet(
 	NewCompositeRouteResolver,
 	NewAIRoutingPolicyService,
 	NewAIRoutingDecider,
+	ProvideAIRoutingResponsesBackgroundService,
 	NewAccountService,
 	NewProxyService,
 	NewRedeemService,

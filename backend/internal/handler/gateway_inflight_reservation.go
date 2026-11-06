@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -25,11 +26,27 @@ func requestMaxOutputTokens(body []byte) int {
 
 // tokenInflightEstimate 文本类请求的估算输入。
 func tokenInflightEstimate(model string, body []byte) service.InflightEstimateRequest {
+	choices := 1
+	// Keep the per-choice limit separate. The estimator applies n after its
+	// default and per-choice cap, so omitted limits and capped limits both work.
+	if gjson.GetBytes(body, "messages").IsArray() {
+		if value := gjson.GetBytes(body, "n"); value.Type == gjson.Number {
+			if n, err := strconv.ParseUint(value.Raw, 10, 64); err == nil && n > 1 {
+				maxInt := int(^uint(0) >> 1)
+				if n > uint64(maxInt) {
+					choices = maxInt
+				} else {
+					choices = int(n)
+				}
+			}
+		}
+	}
 	return service.InflightEstimateRequest{
-		Model:     model,
-		BodyBytes: len(body),
-		MaxTokens: requestMaxOutputTokens(body),
-		Kind:      service.InflightEstimateToken,
+		Model:         model,
+		BodyBytes:     len(body),
+		MaxTokens:     requestMaxOutputTokens(body),
+		OutputChoices: choices,
+		Kind:          service.InflightEstimateToken,
 	}
 }
 

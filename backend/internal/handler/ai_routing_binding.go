@@ -61,6 +61,9 @@ func loadAIToolBinding(ctx context.Context, store service.AIRoutingStore, key *s
 	if err != nil {
 		return binding, err
 	}
+	if len(rows) != len(keys) {
+		return binding, errors.New("tool binding lookup incomplete")
+	}
 	for i, raw := range rows {
 		var b aiToolBinding
 		if json.Unmarshal([]byte(raw), &b) != nil || b.Account <= 0 || b.Candidate == "" {
@@ -144,12 +147,14 @@ func validateAIToolProtocolObject(object map[string]any) error {
 // it exposes has been persisted. Other complete SSE events flow immediately.
 type aiToolWriter struct {
 	gin.ResponseWriter
-	pending   []byte
-	lineStart int
-	emitted   map[string]bool
-	bind      func(string) error
-	onFailure func(error)
-	err       error
+	pending     []byte
+	lineStart   int
+	emitted     map[string]bool
+	bind        func(string) error
+	inspect     func([]byte, string) error
+	inspectDone func() error
+	onFailure   func(error)
+	err         error
 }
 
 func (w *aiToolWriter) bindTool(block aiToolBlock) error {
@@ -194,8 +199,14 @@ func (w *aiToolWriter) bindEvent() error {
 			data = append(data, value...)
 		}
 	}
+	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) && w.inspectDone != nil {
+		return w.inspectDone()
+	}
 	if len(data) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return nil
+	}
+	if w.inspect != nil {
+		return w.inspect(data, event)
 	}
 	if err := validateAIToolJSON(data); err != nil {
 		return err
@@ -254,7 +265,7 @@ func (w *aiToolWriter) Write(data []byte) (int, error) {
 	if w.err != nil {
 		return 0, w.err
 	}
-	if w.bind == nil || w.Status() >= 300 {
+	if w.inspect == nil && (w.bind == nil || w.Status() >= 300) {
 		w.pending = nil
 		return w.ResponseWriter.Write(data)
 	}
@@ -315,13 +326,13 @@ func (w *aiToolWriter) Written() bool {
 }
 
 func (w *aiToolWriter) WriteHeaderNow() {
-	if w.bind == nil || w.Status() >= 300 {
+	if w.inspect == nil && (w.bind == nil || w.Status() >= 300) {
 		w.ResponseWriter.WriteHeaderNow()
 	}
 }
 
 func (w *aiToolWriter) Flush() {
-	if w.err == nil && (w.bind == nil || w.ResponseWriter.Written() || w.Status() >= 300) {
+	if w.err == nil && (w.ResponseWriter.Written() || w.inspect == nil && (w.bind == nil || w.Status() >= 300)) {
 		w.ResponseWriter.Flush()
 	}
 }
@@ -335,6 +346,12 @@ func (w *aiToolWriter) finish() error {
 	}
 	if w.isStream() {
 		return w.fail(errors.New("incomplete tool SSE event"))
+	}
+	if w.inspect != nil {
+		if err := w.inspect(w.pending, ""); err != nil {
+			return w.fail(err)
+		}
+		return w.forwardPending()
 	}
 	if err := validateAIToolJSON(w.pending); err != nil {
 		return w.fail(err)

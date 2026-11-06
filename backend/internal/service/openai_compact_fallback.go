@@ -252,6 +252,11 @@ func (s *OpenAIGatewayService) prepareOpenAICompactFallbackRetry(
 	upstreamBody []byte,
 	alreadyRetried bool,
 ) ([]byte, string, bool) {
+	if c != nil && c.Request != nil {
+		if r, ok := AIRoutingExecutionRequirementsFromContext(c.Request.Context()); ok && (r.Operation == AIRoutingResponsesCompact || r.Operation == AIRoutingResponsesCompactV2) {
+			return currentBody, "", false
+		}
+	}
 	if alreadyRetried || !isExplicitOpenAICompactRequest(c, currentBody) ||
 		!isOpenAICompactModelFailure(statusCode, upstreamMsg, upstreamBody) {
 		return currentBody, "", false

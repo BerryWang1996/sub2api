@@ -6,7 +6,28 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/stretchr/testify/require"
 )
+
+func TestBackgroundIndependentMonthlyWindowsDoNotPromiseSingleReset(t *testing.T) {
+	now := time.Now()
+	ordinary := now.Add(-10 * 24 * time.Hour)
+	background := now.Add(-20 * 24 * time.Hour)
+	row := service.UserPlatformQuotaRecord{MonthlyUsageUSD: 3, MonthlyWindowStart: &ordinary, BackgroundUsage: &service.AIRoutingBackgroundPlatformReserved{PendingUSD: 2, DailyUSD: 2, WeeklyUSD: 2, MonthlyUSD: 7, MonthlyWindowStart: &background, MonthlyWindowIndependent: true}}
+	view := LazyZeroQuotaForResponse(row, now, true)
+	require.Equal(t, 8.0, view["monthly_usage_usd"])
+	require.Equal(t, 2.0, view["background_reserved_usd"])
+	require.Nil(t, view["monthly_window_resets_at"])
+	require.Equal(t, true, view["monthly_window_independent"])
+	ordinaryReset, ok := view["ordinary_monthly_window_resets_at"].(*string)
+	require.True(t, ok)
+	backgroundReset, ok := view["background_monthly_window_resets_at"].(*string)
+	require.True(t, ok)
+	require.NotNil(t, ordinaryReset)
+	require.NotNil(t, backgroundReset)
+	require.Equal(t, ordinary.Add(30*24*time.Hour).Format(time.RFC3339), *ordinaryReset)
+	require.Equal(t, background.Add(30*24*time.Hour).Format(time.RFC3339), *backgroundReset)
+}
 
 // TestNextMonthlyResetTimeFrom_FromStart 验证：start 已知时返回 start+30d，不随 now 漂移。
 func TestNextMonthlyResetTimeFrom_FromStart(t *testing.T) {

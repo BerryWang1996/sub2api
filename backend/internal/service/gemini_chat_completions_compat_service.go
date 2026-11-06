@@ -55,6 +55,17 @@ func (s *GeminiMessagesCompatService) ForwardAsChatCompletions(
 	if err != nil {
 		return nil, s.writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 	}
+	var replay *geminiResponsesReplay
+	callbacks, _ := ctx.Value(geminiResponsesToolStateKey{}).(GeminiResponsesToolStateCallbacks)
+	if aiStrictChatTerminal(c) {
+		replay, err = prepareGeminiResponsesReplay(ctx, responsesReq, callbacks)
+		if err != nil {
+			if !handleAIRoutingCapacityError(c, err) {
+				_ = s.writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			}
+			return nil, err
+		}
+	}
 
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)
 	if err != nil {
@@ -67,6 +78,15 @@ func (s *GeminiMessagesCompatService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("marshal chat completions compat request: %w", err)
 	}
 
+	if replay != nil {
+		options := &geminiResponsesForwardOptions{
+			prepare: func(wire []byte) ([]byte, error) { return replay.apply(wire, responsesReq.ToolChoice) },
+			consume: func(resp *http.Response, upstreamStream bool) (*geminiStreamResult, error) {
+				return consumeGeminiResponses(ctx, c, resp, startTime, originalModel, clientStream, upstreamStream, apicompat.ResponsesClientToolMapping{}, callbacks, s.cfg, s.responseHeaderFilter, &geminiResponsesChatOutput{includeUsage: includeUsage})
+			},
+		}
+		return s.forwardClaudeBodyAsChatCompletions(ctx, c, account, claudeBody, originalModel, clientStream, includeUsage, startTime, options)
+	}
 	return s.forwardClaudeBodyAsChatCompletions(ctx, c, account, claudeBody, originalModel, clientStream, includeUsage, startTime)
 }
 
@@ -79,6 +99,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 	clientStream bool,
 	includeUsage bool,
 	startTime time.Time,
+	responsesOptions ...*geminiResponsesForwardOptions,
 ) (*ForwardResult, error) {
 	var req struct {
 		Model  string `json:"model"`
@@ -105,6 +126,13 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 	}
 	geminiReq = ensureGeminiFunctionCallThoughtSignatures(geminiReq)
 	geminiReq = applyGeminiCompatThinkingConfig(geminiReq, claudeBody, mappedModel, clientStream)
+	var responses *geminiResponsesForwardOptions
+	if len(responsesOptions) > 0 {
+		responses = responsesOptions[0]
+		if geminiReq, err = responses.prepare(geminiReq); err != nil {
+			return nil, s.writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
+	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -256,7 +284,16 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 	var firstTokenMs *int
 	clientDisconnect := false
 	streamFinished := false
-	if clientStream {
+	var consumeErr error
+	if responses != nil {
+		streamRes, err := responses.consume(resp, useUpstreamStream)
+		if streamRes == nil {
+			return nil, err
+		}
+		usage, firstTokenMs = streamRes.usage, streamRes.firstTokenMs
+		clientDisconnect, streamFinished = streamRes.clientDisconnect, streamRes.finished
+		consumeErr = err
+	} else if clientStream {
 		streamRes, err := s.handleChatCompletionsStreamingResponseFromGemini(c, resp, startTime, originalModel, account.Type == AccountTypeOAuth, includeUsage)
 		if err != nil {
 			return nil, err
@@ -315,7 +352,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		ImageSize:        imageSize,
 		ImageInputSize:   imageInputSize,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}, consumeErr
 }
 
 func (s *GeminiMessagesCompatService) buildGeminiChatCompletionsUpstreamRequestFunc(

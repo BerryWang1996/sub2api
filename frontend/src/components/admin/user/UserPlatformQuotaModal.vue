@@ -89,6 +89,12 @@
               </td>
               <td class="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
                 {{ formatUsage(row.daily_usage_usd) }} / {{ formatUsage(row.weekly_usage_usd) }} / {{ formatUsage(row.monthly_usage_usd) }}
+                <div v-if="row.background_reserved_usd > 0" class="text-amber-600 dark:text-amber-400">
+                  {{ t('admin.users.platformQuota.backgroundReserved', { amount: formatUsage(row.background_reserved_usd) }) }}
+                </div>
+                <p v-if="row.monthly_window_independent" class="mt-1 max-w-xs whitespace-normal text-gray-500">
+                  {{ t('admin.users.platformQuota.monthlySplitWindows', { ordinary: row.ordinary_monthly_window_resets_at ? formatDateTime(row.ordinary_monthly_window_resets_at) : '—', background: row.background_monthly_window_resets_at ? formatDateTime(row.background_monthly_window_resets_at) : '—' }) }}
+                </p>
               </td>
             </tr>
           </tbody>
@@ -121,6 +127,7 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { platformQuotaPlatforms } from '@/api/admin/users'
 import type { AdminUser, PlatformQuotaItem, PlatformQuotaPlatform, PlatformQuotaWindow } from '@/types'
+import { formatDateTime } from '@/utils/format'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 
 const props = defineProps<{ show: boolean; user: AdminUser | null }>()
@@ -137,6 +144,10 @@ interface QuotaRow {
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  background_reserved_usd: number
+  monthly_window_independent?: boolean
+  ordinary_monthly_window_resets_at?: string | null
+  background_monthly_window_resets_at?: string | null
 }
 
 const hasActiveSubscription = computed(() =>
@@ -169,6 +180,7 @@ function emptyRow(p: PlatformQuotaPlatform): QuotaRow {
     daily_usage_usd: 0,
     weekly_usage_usd: 0,
     monthly_usage_usd: 0,
+    background_reserved_usd: 0,
   }
 }
 
@@ -186,6 +198,10 @@ function normalize(items: PlatformQuotaItem[]): QuotaRow[] {
       daily_usage_usd: it.daily_usage_usd ?? 0,
       weekly_usage_usd: it.weekly_usage_usd ?? 0,
       monthly_usage_usd: it.monthly_usage_usd ?? 0,
+      background_reserved_usd: it.background_reserved_usd ?? 0,
+      monthly_window_independent: it.monthly_window_independent,
+      ordinary_monthly_window_resets_at: it.ordinary_monthly_window_resets_at,
+      background_monthly_window_resets_at: it.background_monthly_window_resets_at,
     }
   })
 }

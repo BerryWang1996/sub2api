@@ -312,6 +312,91 @@ func TestInflightScopeReservation_ReturnsOthersAndReleases(t *testing.T) {
 	require.Zero(t, others, "过期预留不再计入")
 }
 
+func TestInflightScopeReservation_RenewsWithoutRevivingExpiredHold(t *testing.T) {
+	_, cache, _ := newInflightTestEnv(t, true, 60)
+	ctx := t.Context()
+	scope := "background-platform:7:openai"
+	_, err := cache.ReserveInflightScope(ctx, scope, "live", 2, time.Minute)
+	require.NoError(t, err)
+	alive, err := cache.RenewInflightScope(ctx, scope, "live", 2*time.Minute)
+	require.NoError(t, err)
+	require.True(t, alive)
+	zkey, hkey := billingInflightScopeKeys(scope)
+	score, err := cache.rdb.ZScore(ctx, zkey, "live").Result()
+	require.NoError(t, err)
+	require.Greater(t, score, float64(time.Now().Add(time.Minute).UnixMilli()))
+	require.NoError(t, cache.rdb.ZAdd(ctx, zkey, redis.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "live"}).Err())
+	alive, err = cache.RenewInflightScope(ctx, scope, "live", time.Minute)
+	require.NoError(t, err)
+	require.False(t, alive)
+	present, err := cache.rdb.HExists(ctx, hkey, "live").Result()
+	require.NoError(t, err)
+	require.False(t, present)
+	_, err = cache.ReserveInflightScope(ctx, scope, "partial", 2, time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, cache.rdb.HDel(ctx, hkey, "partial").Err())
+	alive, err = cache.RenewInflightScope(ctx, scope, "partial", time.Minute)
+	require.NoError(t, err)
+	require.False(t, alive, "a missing amount is not a live financial reservation")
+}
+
+type backgroundPlatformRedisLedger struct {
+	service.AIRoutingBackgroundRepository
+}
+
+func (*backgroundPlatformRedisLedger) ReservedPlatform(context.Context, int64, string, service.AIRoutingBackgroundPlatformWindows) (service.AIRoutingBackgroundPlatformReserved, error) {
+	return service.AIRoutingBackgroundPlatformReserved{}, nil
+}
+
+type backgroundPlatformRedisQuota struct {
+	service.UserPlatformQuotaRepository
+	row service.UserPlatformQuotaRecord
+}
+
+func (q *backgroundPlatformRedisQuota) GetByUserPlatform(context.Context, int64, string) (*service.UserPlatformQuotaRecord, error) {
+	row := q.row
+	return &row, nil
+}
+
+func TestBackgroundPlatformRedisConcurrentHoldsCoverOrdinaryUsage(t *testing.T) {
+	_, cache, _ := newInflightTestEnv(t, false, 60)
+	now := time.Now()
+	limit := 10.0
+	quota := &backgroundPlatformRedisQuota{row: service.UserPlatformQuotaRecord{UserID: 7, Platform: "openai", DailyLimitUSD: &limit, DailyUsageUSD: 2, DailyWindowStart: &now}}
+	svc := service.NewBillingCacheService(cache, nil, nil, nil, nil, nil, &config.Config{}, quota)
+	svc.SetBackgroundReservations(&backgroundPlatformRedisLedger{})
+	defer svc.Stop()
+	var admitted atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	reservations := make(chan *service.InflightReservation, 12)
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			r, err := svc.ReserveAIRoutingBackgroundPlatformHold(t.Context(), 7, "openai", 4)
+			if err != nil {
+				require.ErrorIs(t, err, service.ErrUserPlatformDailyQuotaExhausted)
+				return
+			}
+			admitted.Add(1)
+			reservations <- r
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(reservations)
+	require.EqualValues(t, 2, admitted.Load(), "ordinary use 2 plus two background holds 4 fits the limit 10")
+	for r := range reservations {
+		r.Release()
+	}
+	zkey, _ := billingInflightScopeKeys("background-platform:7:openai")
+	n, err := cache.rdb.ZCard(t.Context(), zkey).Result()
+	require.NoError(t, err)
+	require.Zero(t, n)
+}
+
 func TestReserveFixedCharge_ConcurrentChargesAdmitOnlyWhatAPIKeyQuotaCovers(t *testing.T) {
 	_, cache, svc := newInflightTestEnv(t, true, 60)
 	ctx := context.Background()

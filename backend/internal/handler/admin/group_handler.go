@@ -25,6 +25,7 @@ type GroupHandler struct {
 	aiPolicies           *service.AIRoutingPolicyService
 	aiDecider            service.AIModelChooser
 	aiStore              service.AIRoutingStore
+	aiBackground         *service.AIRoutingResponsesBackgroundService
 	adminService         service.AdminService
 	dashboardService     *service.DashboardService
 	groupCapacityService *service.GroupCapacityService

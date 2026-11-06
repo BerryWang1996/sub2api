@@ -126,6 +126,9 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	})
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
+		if handleAIRoutingCapacityError(c, err) {
+			return nil, err
+		}
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 			return nil, &UpstreamFailoverError{
 				StatusCode:        http.StatusServiceUnavailable,
@@ -211,6 +214,9 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					sessionHash:     "", // Forward 方法没有 sessionHash，由上层处理粘性会话清除
 				})
 				if retryErr != nil {
+					if handleAIRoutingCapacityError(c, retryErr) {
+						return nil, retryErr
+					}
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						ProxyID:            opsUpstreamProxyID(account),
 						ProxyName:          opsUpstreamProxyName(account),
@@ -338,6 +344,9 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 							groupID:         0,
 							sessionHash:     "",
 						})
+						if handleAIRoutingCapacityError(c, retryErr) {
+							return nil, retryErr
+						}
 						if retryErr == nil {
 							retryResp := retryResult.resp
 							if retryResp.StatusCode < 400 {

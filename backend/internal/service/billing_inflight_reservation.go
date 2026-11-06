@@ -36,6 +36,12 @@ type InflightScopeReservationCache interface {
 	ReleaseInflightScope(ctx context.Context, scope, requestID string) error
 }
 
+// Only durable background admission requires renewable, fail-closed scope
+// reservations. Existing ordinary reservation behavior remains unchanged.
+type InflightScopeReservationRenewer interface {
+	RenewInflightScope(ctx context.Context, scope, requestID string, ttl time.Duration) (bool, error)
+}
+
 // InflightBalanceReservationRenewer 可选：续期仍存活的预留（流式长请求期间防止 TTL 过期）。
 type InflightBalanceReservationRenewer interface {
 	// RenewInflightBalance 若 requestID 仍存在则把其过期时间推迟到 now+ttl；返回是否仍存在。
@@ -72,8 +78,10 @@ type InflightReservation struct {
 	amount    float64
 	ttl       time.Duration
 	// scopes 是同一金额在订阅 / API Key 维度登记的预留（与余额维度共用 requestID），不续期。
-	scopeCache InflightScopeReservationCache
-	scopes     []string
+	scopeCache         InflightScopeReservationCache
+	scopes             []string
+	strictScopeRenewer InflightScopeReservationRenewer
+	strictScopeLost    atomic.Bool
 
 	refs        atomic.Int64
 	releaseOnce sync.Once
@@ -81,6 +89,49 @@ type InflightReservation struct {
 	closeOnce   sync.Once
 	stopRenew   chan struct{}
 	renewDone   chan struct{}
+}
+
+func (r *InflightReservation) checkStrictScope(ctx context.Context) error {
+	if r == nil || r.strictScopeRenewer == nil {
+		return nil
+	}
+	if r.strictScopeLost.Load() || r.refs.Load() <= 0 {
+		return ErrBillingServiceUnavailable
+	}
+	for _, scope := range r.scopes {
+		checkCtx, cancel := context.WithTimeout(ctx, inflightReservationRenewTimeout)
+		alive, err := r.strictScopeRenewer.RenewInflightScope(checkCtx, scope, r.requestID, r.ttl)
+		cancel()
+		if err != nil || !alive {
+			r.strictScopeLost.Store(true)
+			return ErrBillingServiceUnavailable
+		}
+	}
+	return nil
+}
+
+func (r *InflightReservation) startStrictScopeRenewal() {
+	r.stopRenew = make(chan struct{})
+	r.renewDone = make(chan struct{})
+	interval := r.ttl / 3
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	go func() {
+		defer close(r.renewDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.stopRenew:
+				return
+			case <-ticker.C:
+				if r.checkStrictScope(context.Background()) != nil {
+					return
+				}
+			}
+		}
+	}()
 }
 
 // Amount 预留金额。
@@ -372,7 +423,9 @@ type InflightEstimateRequest struct {
 	Model     string
 	BodyBytes int
 	MaxTokens int
-	Kind      InflightEstimateKind
+	// OutputChoices counts independent Chat choices; zero keeps legacy one.
+	OutputChoices int
+	Kind          InflightEstimateKind
 	// Units 按次/按张数量（<=0 视为 1）。
 	Units int
 	// SearchCalls 叠加的搜索次数（按分组 search_price_per_1k 计）。
@@ -387,6 +440,9 @@ type InflightEstimateRequest struct {
 
 // inflightEstimateDeps 两种网关 service 共用的估算依赖。
 type inflightEstimateDeps struct {
+	// Zero keeps ordinary request-time behavior; long-lived AI WS turns supply
+	// the same frozen pricing time used by their eventual usage settlement.
+	pricingAt      time.Time
 	cfg            *config.Config
 	billing        *BillingService
 	resolver       *ModelPricingResolver
@@ -499,7 +555,11 @@ func (d inflightEstimateDeps) rates(ctx context.Context, apiKey *APIKey) (text, 
 			rate = d.userGroupRate(ctx, apiKey.User.ID, *apiKey.GroupID, rate)
 		}
 	}
-	return computePeakAwareMultipliers(apiKey, rate, timezone.Now())
+	pricingAt := d.pricingAt
+	if pricingAt.IsZero() {
+		pricingAt = timezone.Now()
+	}
+	return computePeakAwareMultipliers(apiKey, rate, pricingAt)
 }
 
 func tokenCounts(cfg config.InflightReservationConfig, bodyBytes, maxTokens int) (int, int) {
@@ -536,6 +596,17 @@ func maxPerRequestPrice(resolved *ResolvedPricing) float64 {
 	return p
 }
 
+func aggregateInflightOutputTokens(perChoice, choices int) int {
+	if choices <= 1 || perChoice <= 0 {
+		return perChoice
+	}
+	maxInt := int(^uint(0) >> 1)
+	if perChoice > maxInt/choices {
+		return maxInt
+	}
+	return perChoice * choices
+}
+
 func validCost(v float64) bool { return v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // estimateOne 估算单个候选计费模型（未乘倍率的 token 部分与按次部分分开返回，便于套用不同倍率）。
@@ -556,6 +627,7 @@ func (d inflightEstimateDeps) estimateOne(ctx context.Context, apiKey *APIKey, m
 	}
 
 	inputTokens, outputTokens := tokenCounts(cfg, req.BodyBytes, req.MaxTokens)
+	outputTokens = aggregateInflightOutputTokens(outputTokens, req.OutputChoices)
 	tokenCost := func() float64 {
 		var pricing *ModelPricing
 		if resolved != nil && (resolved.Mode == BillingModeToken || resolved.Mode == "") && d.resolver != nil {

@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tiktoken-go/tokenizer"
@@ -33,6 +35,7 @@ type openAIInputTokensCountRequest struct {
 }
 
 type openAIInputTokensCountPrepared struct {
+	Body            []byte
 	Request         openAIInputTokensCountRequest
 	OriginalModel   string
 	NormalizedModel string
@@ -62,6 +65,9 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	}
 
 	if shouldEstimateOpenAIInputTokensLocally(account) {
+		if err := checkAIRoutingLocalInputTokens(ctx, c, account, body); err != nil {
+			return err
+		}
 		writeOpenAIResponsesInputTokensFallback(c, account, prepared, 0, "custom_relay")
 		return nil
 	}
@@ -85,6 +91,9 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
+		if handleAIRoutingCapacityError(c, err) {
+			return err
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
@@ -92,7 +101,15 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	reader := io.Reader(resp.Body)
+	_, aiCount := aiResponsesInputTokensRequirements(ctx)
+	if aiCount {
+		reader = io.LimitReader(resp.Body, 4<<20+1)
+	}
+	respBody, err := io.ReadAll(reader)
+	if aiCount && len(respBody) > 4<<20 {
+		err = fmt.Errorf("responses input_tokens: upstream response too large")
+	}
 	if err != nil {
 		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
 		return fmt.Errorf("responses input_tokens: read upstream response: %w", err)
@@ -100,6 +117,9 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 
 	if resp.StatusCode >= 400 {
 		if isOpenAIResponsesInputTokensUnsupported(account, resp.StatusCode, respBody) {
+			if err := checkAIRoutingLocalInputTokens(ctx, c, account, body); err != nil {
+				return err
+			}
 			writeOpenAIResponsesInputTokensFallback(c, account, prepared, resp.StatusCode, "upstream_unsupported")
 			return nil
 		}
@@ -119,6 +139,18 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	if !inputTokens.Exists() {
 		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response missing input_tokens")
 		return fmt.Errorf("responses input_tokens: upstream response missing input_tokens")
+	}
+	if aiCount {
+		count, parseErr := strconv.ParseInt(inputTokens.Raw, 10, 64)
+		if !requestmodel.HasUniqueJSONMembers(respBody) || inputTokens.Type != gjson.Number || parseErr != nil || count < 0 {
+			writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response has invalid input_tokens")
+			return fmt.Errorf("responses input_tokens: invalid upstream count")
+		}
+		c.Header("X-Sub2API-Token-Count-Source", "upstream")
+		// This endpoint returns a count, never unbound response/item identifiers
+		// or unrelated provider payload fields from a malformed compatible API.
+		c.JSON(http.StatusOK, gin.H{"object": "response.input_tokens", "input_tokens": count, "count_source": "upstream", "estimated": false})
+		return nil
 	}
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if contentType == "" {
@@ -141,6 +173,7 @@ func prepareNativeOpenAIInputTokensCountRequest(body []byte, account *Account) (
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	req.Model = upstreamModel
 	return &openAIInputTokensCountPrepared{
+		Body:            append([]byte(nil), body...),
 		Request:         req,
 		OriginalModel:   originalModel,
 		NormalizedModel: originalModel,
@@ -175,6 +208,24 @@ func isOpenAIResponsesInputTokensUnsupported(account *Account, statusCode int, b
 }
 
 func writeOpenAIResponsesInputTokensFallback(c *gin.Context, account *Account, prepared *openAIInputTokensCountPrepared, statusCode int, reason string) {
+	ctx := context.Background()
+	if c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	if _, aiCount := aiResponsesInputTokensRequirements(ctx); aiCount {
+		if prepared == nil || !aiResponsesLocalCountComplete(prepared.Body) {
+			writeAIResponsesInputTokensUnsupported(c)
+			return
+		}
+		count, err := estimateOpenAIInputTokens(prepared.Request)
+		if err != nil || count < 0 {
+			writeAIResponsesInputTokensUnsupported(c)
+			return
+		}
+		c.Header("X-Sub2API-Token-Count-Source", "local_estimated")
+		c.JSON(http.StatusOK, gin.H{"object": "response.input_tokens", "input_tokens": count, "count_source": "local_estimated", "estimated": true})
+		return
+	}
 	estimated := openAIInputTokensFallbackMinimum
 	if prepared != nil {
 		if got, err := estimateOpenAIInputTokens(prepared.Request); err == nil && got > 0 {

@@ -131,10 +131,16 @@ func provideCleanup(
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
+	aiBackground *service.AIRoutingResponsesBackgroundService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		// Finish or abandon durable claims before shutting down their billing,
+		// cache and database dependencies. Unsettled jobs resume after restart.
+		if aiBackground != nil {
+			aiBackground.Stop()
+		}
 
 		type cleanupStep struct {
 			name string

@@ -105,15 +105,16 @@ type subscriptionCacheInvalidationPubSub interface {
 // BillingCacheService 计费缓存服务
 // 负责余额和订阅数据的缓存管理，提供高性能的计费资格检查
 type BillingCacheService struct {
-	cache                 BillingCache
-	userRepo              UserRepository
-	subRepo               UserSubscriptionRepository
-	apiKeyRateLimitLoader apiKeyRateLimitLoader
-	userRPMCache          UserRPMCache
-	userGroupRateRepo     UserGroupRateRepository
-	cfg                   *config.Config
-	circuitBreaker        *billingCircuitBreaker
-	userPlatformQuotaRepo UserPlatformQuotaRepository
+	cache                  BillingCache
+	userRepo               UserRepository
+	subRepo                UserSubscriptionRepository
+	apiKeyRateLimitLoader  apiKeyRateLimitLoader
+	userRPMCache           UserRPMCache
+	userGroupRateRepo      UserGroupRateRepository
+	cfg                    *config.Config
+	circuitBreaker         *billingCircuitBreaker
+	userPlatformQuotaRepo  UserPlatformQuotaRepository
+	backgroundReservations backgroundReservationReader
 
 	cacheWriteChan     chan cacheWriteTask
 	cacheWriteWg       sync.WaitGroup
@@ -747,12 +748,18 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	// API-key monetary windows from the database source of truth.
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		if s.cfg.SimpleModeKeyRateLimitEnabled {
+			if err := s.checkBackgroundReservations(ctx, user, apiKey, group, subscription, 0, 0, 0, false); err != nil {
+				return err
+			}
 			return s.checkSimpleModeAPIKeyRateLimits(ctx, apiKey)
 		}
 		return nil
 	}
 	if s.circuitBreaker != nil && !s.circuitBreaker.Allow() {
 		return ErrBillingServiceUnavailable
+	}
+	if err := s.checkBackgroundReservations(ctx, user, apiKey, group, subscription, 0, 0, 0, false); err != nil {
+		return err
 	}
 
 	// 判断计费模式
@@ -845,6 +852,9 @@ func (s *BillingCacheService) ReserveFixedCharge(ctx context.Context, user *User
 	}
 	if err == nil && apiKey != nil {
 		err = s.checkFixedChargeAPIKey(ctx, apiKey, amount+apiKeyPending)
+	}
+	if err == nil {
+		err = s.checkBackgroundReservations(ctx, user, apiKey, group, subscription, amount, amount+subscriptionPending, amount+apiKeyPending, true)
 	}
 	if err != nil {
 		res.Release()
@@ -1326,6 +1336,9 @@ func (s *BillingCacheService) checkUserPlatformQuotaEligibility(
 			}
 			setCancel()
 		}
+		if err := s.checkBackgroundPlatform(ctx, UserPlatformQuotaRecord{UserID: userID, Platform: platform, DailyUsageUSD: dailyUsage, WeeklyUsageUSD: weeklyUsage, MonthlyUsageUSD: monthlyUsage, DailyLimitUSD: entry.DailyLimitUSD, WeeklyLimitUSD: entry.WeeklyLimitUSD, MonthlyLimitUSD: entry.MonthlyLimitUSD, DailyWindowStart: entry.DailyWindowStart, WeeklyWindowStart: entry.WeeklyWindowStart, MonthlyWindowStart: entry.MonthlyWindowStart}, now); err != nil {
+			return err
+		}
 		if entry.DailyLimitUSD != nil && dailyUsage >= *entry.DailyLimitUSD {
 			return withWindowResetsMetadata(ErrUserPlatformDailyQuotaExhausted, nextDailyReset(now))
 		}
@@ -1362,6 +1375,9 @@ func (s *BillingCacheService) checkUserPlatformQuotaEligibility(
 		return nil
 	}
 	if dbErr != nil {
+		if _, reserving := ctx.Value(aiBackgroundPlatformHoldKey{}).(aiBackgroundPlatformHold); reserving {
+			return ErrBillingServiceUnavailable.WithCause(dbErr)
+		}
 		logger.LegacyPrintf("service.billing_cache", "Warning: load user platform quota failed user=%d platform=%s: %v (fail-open)", userID, platform, dbErr)
 		return nil
 	}
@@ -1409,6 +1425,11 @@ func (s *BillingCacheService) checkUserPlatformQuotaEligibility(
 	}
 	if monthlyQuotaWindowExpired(rec.MonthlyWindowStart, now) {
 		monthlyUsage = 0
+	}
+	backgroundView := *rec
+	backgroundView.DailyUsageUSD, backgroundView.WeeklyUsageUSD, backgroundView.MonthlyUsageUSD = dailyUsage, weeklyUsage, monthlyUsage
+	if err := s.checkBackgroundPlatform(ctx, backgroundView, now); err != nil {
+		return err
 	}
 
 	// Redis 故障时 fail-open：不回填，直接用 DB 数据做一次性检查

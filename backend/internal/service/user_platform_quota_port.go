@@ -42,6 +42,8 @@ type UserPlatformQuotaRecord struct {
 	DailyWindowStart   *time.Time
 	WeeklyWindowStart  *time.Time
 	MonthlyWindowStart *time.Time
+	// Read-only ledger projection populated only for user/admin list views.
+	BackgroundUsage *AIRoutingBackgroundPlatformReserved
 }
 
 // HasAnyLimit 报告该记录是否至少配置了一档限额（0 也算配置）。

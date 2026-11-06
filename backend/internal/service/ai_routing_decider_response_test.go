@@ -62,3 +62,74 @@ func TestAIRoutingAmbiguousDecisionUsesConfiguredFallback(t *testing.T) {
 	require.Equal(t, 1, calls)
 	require.Equal(t, []int64{41}, slots.releasedAccountIDs)
 }
+
+func aiDecisionReviewStreamEvent(kind, response string) string {
+	return `data: {"type":"` + kind + `","response":` + response + "}\n\n"
+}
+
+func TestAIRoutingDecisionStreamTerminalUsageCompleteness(t *testing.T) {
+	complete := `"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"c1"}]}]`
+	progress := aiDecisionReviewStreamEvent("response.in_progress", `{"model":"progress-model","usage":{"input_tokens":12,"output_tokens":2}}`)
+	tests := []struct {
+		name, stream, text, model string
+		input, output             int
+		known, wantError          bool
+	}{
+		{name: "complete", stream: aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"model":"actual-model","usage":{"input_tokens":12,"output_tokens":3}}`), text: "c1", model: "actual-model", input: 12, output: 3, known: true},
+		{name: "missing output", stream: aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"usage":{"input_tokens":12}}`), text: "c1", input: 12},
+		{name: "missing input", stream: aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"usage":{"output_tokens":3}}`), text: "c1", output: 3},
+		{name: "missing usage", stream: aiDecisionReviewStreamEvent("response.completed", `{`+complete+`}`), text: "c1"},
+		{name: "explicit zero", stream: aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"usage":{"input_tokens":0,"output_tokens":0}}`), text: "c1", known: true},
+		{name: "null count unknown", stream: aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"usage":{"input_tokens":12,"output_tokens":null}}`), text: "c1", input: 12},
+		{name: "failed with complete usage", stream: aiDecisionReviewStreamEvent("response.failed", `{"status":"failed","model":"failed-model","usage":{"input_tokens":12,"output_tokens":3}}`), model: "failed-model", input: 12, output: 3, known: true, wantError: true},
+		{name: "incomplete with complete usage", stream: aiDecisionReviewStreamEvent("response.incomplete", `{"status":"incomplete","model":"incomplete-model","usage":{"input_tokens":12,"output_tokens":3}}`), model: "incomplete-model", input: 12, output: 3, known: true, wantError: true},
+		{name: "selection invalid but usage complete", stream: aiDecisionReviewStreamEvent("response.completed", `{"status":"completed","output":[{"type":"function_call"}],"model":"tool-model","usage":{"input_tokens":12,"output_tokens":3}}`), model: "tool-model", input: 12, output: 3, known: true, wantError: true},
+		{name: "progress then disconnect", stream: progress, input: 12, output: 2, wantError: true},
+		{name: "progress cannot fill missing terminal field", stream: progress + aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"model":"final-model","usage":{"input_tokens":15}}`), text: "c1", model: "final-model", input: 15, output: 2},
+		{name: "terminal zero replaces progress", stream: progress + aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"usage":{"input_tokens":0,"output_tokens":0}}`), text: "c1", known: true},
+		{name: "failure without terminal usage", stream: progress + aiDecisionReviewStreamEvent("response.failed", `{"status":"failed","model":"final-model"}`), model: "final-model", input: 12, output: 2, wantError: true},
+		{name: "oversized reported model omitted", stream: aiDecisionReviewStreamEvent("response.completed", `{`+complete+`,"model":"`+strings.Repeat("m", 257)+`","usage":{"input_tokens":1,"output_tokens":1}}`), text: "c1", input: 1, output: 1, known: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := readAIDecisionStreamResult(strings.NewReader(tt.stream))
+			if tt.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.text, result.Text)
+			require.Equal(t, tt.input, result.InputTokens)
+			require.Equal(t, tt.output, result.OutputTokens)
+			require.Equal(t, tt.model, result.ReportedModel)
+			require.Equal(t, tt.known, result.UsageKnown)
+			text, input, output, oldErr := readAIDecisionStream(strings.NewReader(tt.stream))
+			require.Equal(t, err != nil, oldErr != nil)
+			require.Equal(t, result.Text, text)
+			require.Equal(t, result.InputTokens, input)
+			require.Equal(t, result.OutputTokens, output)
+		})
+	}
+}
+
+func TestAIRoutingDecisionStreamRejectsInvalidUsage(t *testing.T) {
+	for _, usage := range []string{
+		`{"input_tokens":-1,"output_tokens":1}`,
+		`{"input_tokens":1,"output_tokens":-1}`,
+		`{"input_tokens":1073741825,"output_tokens":1}`,
+		`{"input_tokens":1e1000,"output_tokens":1}`,
+		`{"input_tokens":1.5,"output_tokens":1}`,
+		`{"input_tokens":"12","output_tokens":1}`,
+		`{"input_tokens":12,"input_tokens":0,"output_tokens":1}`,
+		`{"input_tokens":12,"Input_Tokens":0,"output_tokens":1}`,
+	} {
+		t.Run(usage, func(t *testing.T) {
+			stream := aiDecisionReviewStreamEvent("response.completed", `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"c1"}]}],"usage":`+usage+`}`)
+			result, err := readAIDecisionStreamResult(strings.NewReader(stream))
+			require.Error(t, err)
+			require.Empty(t, result.Text)
+			require.False(t, result.UsageKnown)
+			require.NotContains(t, err.Error(), usage, "operational errors never echo upstream data")
+		})
+	}
+}

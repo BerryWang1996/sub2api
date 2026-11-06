@@ -137,7 +137,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 ) (*OpenAIForwardResult, error) {
 	requestedModel := reqModel
 	upstreamPassthroughModel := ""
-	if isOpenAIResponsesCompactPath(c) {
+	if isOpenAIResponsesCompactPath(c) && !isAIRoutingResponsesCompact(ctx) {
 		compactMappedModel := s.resolveOpenAICompactFallbackModel(account, reqModel)
 		if compactMappedModel != "" && compactMappedModel != reqModel {
 			nextBody, setErr := sjson.SetBytes(body, "model", compactMappedModel)
@@ -2037,6 +2037,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
 			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			if err := observeAIBackgroundResponsePayload(ctx, aiBackgroundResponseAccountID(account), dataBytes, pendingSSEEventType); err != nil {
+				handleAIRoutingCapacityError(c, err)
+				return resultWithUsage(), err
+			}
 			observer.ObserveOpenAI(dataBytes, rawEventType)
 			if needModelReplace {
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
@@ -2322,6 +2326,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 ) (*openaiNonStreamingResultPassthrough, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
+		return nil, err
+	}
+	if err := observeAIBackgroundResponseBody(ctx, aiBackgroundResponseAccountID(account), body); err != nil {
+		handleAIRoutingCapacityError(c, err)
 		return nil, err
 	}
 	observer := upstreamResponseModelObserverFromContext(c)

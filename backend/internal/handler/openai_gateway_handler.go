@@ -259,6 +259,7 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
 	if requestID, _ := parent.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
 		base = context.WithValue(base, ctxkey.RequestID, strings.TrimSpace(requestID))
 	}
+	base = service.CopyAIRoutingBackgroundBillingOwner(base, parent)
 	return service.CopyAIRoutingBillingModel(base, parent)
 }
 
@@ -525,13 +526,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if apiKey.GroupID != nil {
 			groupID = *apiKey.GroupID
 		}
-		owned, ownershipErr := h.gatewayService.ValidateOpenAIHTTPResponseOwner(
-			c.Request.Context(),
-			groupID,
-			previousResponseID,
-			subject.UserID,
-			apiKey.ID,
-		)
+		// AI continuations were authorized against the strict-Key origin before
+		// dispatch. The legacy same-user cache has a shorter TTL and must neither
+		// grant AI access nor invalidate a still-valid durable AI origin.
+		scope, scoped := service.CompositeRouteScopeFromContext(c.Request.Context())
+		owned := scoped && scope.AICandidateID != "" && scope.BoundAccountID > 0
+		var ownershipErr error
+		if !owned {
+			owned, ownershipErr = h.gatewayService.ValidateOpenAIHTTPResponseOwner(
+				c.Request.Context(), groupID, previousResponseID, subject.UserID, apiKey.ID,
+			)
+		}
 		if ownershipErr != nil {
 			reqLog.Warn("openai.previous_response_owner_lookup_failed", zap.Error(ownershipErr))
 		}
@@ -818,7 +823,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// #5148 对齐：错误返回携带的部分 result（流中断前上游已计量的 usage）照常
 		// 入账；failover 错误恒定 result=nil，不会重复计费。
 		submitResponsesUsage := func(res *service.OpenAIForwardResult) {
-			if res == nil {
+			if res == nil || service.AIRoutingBackgroundOwnsBilling(c.Request.Context()) {
 				return
 			}
 			stampOpenAIRequestedReasoningEffort(res, c)
@@ -830,6 +835,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
+			usageFields := clientRequestedUsageFields(c, channelMapping, reqModel, res.UpstreamModel)
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 					Result:             res,
@@ -845,7 +851,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					APIKeyService:      h.apiKeyService,
 					QuotaPlatform:      quotaPlatform,
 					SessionID:          sessionID,
-					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, res.UpstreamModel),
+					ChannelUsageFields: usageFields,
 					PricingAt:          pricingAt,
 					CyberBlocked:       cyberBlocked,
 					NativeCompactionV2: nativeV2,

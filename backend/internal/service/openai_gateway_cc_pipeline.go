@@ -14,8 +14,10 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -286,6 +288,8 @@ func (s *OpenAIGatewayService) scanCCStream(
 	emit func(*apicompat.ChatCompletionsChunk),
 ) ccStreamScanState {
 	var st ccStreamScanState
+	strictTerminal := aiStrictChatTerminal(c)
+	choiceFinished := make(map[int]bool)
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 	for scanner.Scan() {
@@ -302,6 +306,49 @@ func (s *OpenAIGatewayService) scanCCStream(
 			st.SawDone = true
 			break
 		}
+		if strictTerminal {
+			root := gjson.Parse(payload)
+			if !gjson.Valid(payload) || !requestmodel.HasUniqueJSONMembers([]byte(payload)) || !aiCanonicalFields(root, "choices", "error", "usage") || !root.Get("choices").IsArray() || root.Get("error").Exists() {
+				st.Err = errors.New("invalid AI Chat stream frame")
+				return st
+			}
+			frameChoices := make(map[int]bool)
+			for _, choice := range root.Get("choices").Array() {
+				index := choice.Get("index")
+				if !aiCanonicalFields(choice, "index", "delta", "finish_reason") || index.Type != gjson.Number || index.Float() != float64(index.Int()) || index.Int() < 0 || index.Int() > 63 {
+					st.Err = errors.New("invalid AI Chat choice frame")
+					return st
+				}
+				idx := int(index.Int())
+				if frameChoices[idx] || choiceFinished[idx] {
+					st.Err = errors.New("invalid AI Chat choice lifecycle")
+					return st
+				}
+				frameChoices[idx] = true
+				if _, exists := choiceFinished[idx]; !exists {
+					choiceFinished[idx] = false
+				}
+				if finish := choice.Get("finish_reason"); finish.Exists() && finish.Type != gjson.Null {
+					if finish.Type != gjson.String {
+						st.Err = errors.New("invalid AI Chat finish reason")
+						return st
+					}
+					switch finish.Str {
+					case "stop", "length", "tool_calls", "content_filter":
+						choiceFinished[idx] = true
+					default:
+						st.Err = errors.New("unsupported AI Chat finish reason")
+						return st
+					}
+				}
+			}
+			// Both consumers expose a single answer (Responses or Messages).
+			// Reject provider protocol violations instead of merging choices.
+			if len(choiceFinished) > 1 {
+				st.Err = errors.New("multiple Chat choices cannot cross a single-answer bridge")
+				return st
+			}
+		}
 		// 观察上游 CC chunk 回显的 model / service_tier（计费以回显为准）。
 		// CC chunk 无 type 字段，按 untyped payload 观察（上游约束：只有终止
 		// 事件与无类型 body 报告实际处理档位）。
@@ -315,6 +362,10 @@ func (s *OpenAIGatewayService) scanCCStream(
 
 		var chunk apicompat.ChatCompletionsChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			if strictTerminal {
+				st.Err = errors.New("invalid AI Chat chunk payload")
+				return st
+			}
 			logger.L().Warn(logPrefix+": failed to parse chat stream chunk",
 				zap.Error(err),
 				zap.String("request_id", requestID),
@@ -325,7 +376,9 @@ func (s *OpenAIGatewayService) scanCCStream(
 			ms := int(time.Since(startTime).Milliseconds())
 			st.FirstTokenMs = &ms
 		}
-		emit(&chunk)
+		if !strictTerminal || c.Request.Context().Err() == nil {
+			emit(&chunk)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -336,6 +389,18 @@ func (s *OpenAIGatewayService) scanCCStream(
 			)
 		}
 		st.Err = err
+	}
+	if strictTerminal && st.Err == nil {
+		if c.Request.Context().Err() != nil {
+			st.Err = c.Request.Context().Err()
+		} else if len(choiceFinished) == 0 {
+			st.Err = errors.New("AI Chat stream contained no choice")
+		}
+		for _, finished := range choiceFinished {
+			if !finished && st.Err == nil {
+				st.Err = errors.New("AI Chat stream ended before finish_reason")
+			}
+		}
 	}
 	return st
 }

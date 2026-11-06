@@ -41,6 +41,7 @@ var gatewayCompatibilityMetricsLogCounter atomic.Uint64
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
 	aiRouting                 *aiRoutingRuntime
+	aiBackground              aiRoutingBackgroundService
 	gatewayService            *service.GatewayService
 	openAIGatewayService      *service.OpenAIGatewayService
 	geminiCompatService       *service.GeminiMessagesCompatService

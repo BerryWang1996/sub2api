@@ -13,7 +13,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 type antigravityCompatStreamAdapter interface {
@@ -117,6 +119,8 @@ type antigravityCompatStreamSession struct {
 	meaningfulData              bool
 	preContentKeepaliveSent     bool
 	preContentKeepaliveInterval time.Duration
+	strictTerminal              bool
+	realTerminal                bool
 }
 
 const (
@@ -141,12 +145,77 @@ func newAntigravityCompatStreamSession(
 	}
 }
 
-func (s *antigravityCompatStreamSession) consume(line string) {
+func (s *antigravityCompatStreamSession) consume(line string) error {
+	if s.strictTerminal {
+		if err := s.observeRealTerminal(line); err != nil {
+			return err
+		}
+	}
 	claudeEvents := s.processor.ProcessLine(strings.TrimRight(line, "\r\n"))
 	if len(claudeEvents) == 0 {
-		return
+		return nil
 	}
 	s.consumeClaudeEvents(claudeEvents)
+	return nil
+}
+
+// The shared processor finalizes an unfinished Gemini stream for legacy
+// clients. AI routes must prove the native terminal before that finalization;
+// one Responses/Chat result cannot silently collapse multiple candidates.
+func (s *antigravityCompatStreamSession) observeRealTerminal(line string) error {
+	payload, ok := strings.CutPrefix(strings.TrimSpace(line), "data:")
+	if !ok {
+		return nil
+	}
+	payload = strings.TrimSpace(payload)
+	if payload == "[DONE]" {
+		if !s.realTerminal {
+			return errors.New("antigravity stream ended without a finishReason")
+		}
+		return nil
+	}
+	if !gjson.Valid(payload) || !requestmodel.HasUniqueJSONMembers([]byte(payload)) {
+		return errors.New("invalid antigravity stream JSON")
+	}
+	root := gjson.Parse(payload)
+	if root.Get("error").Exists() || !aiCanonicalFields(root, "response", "candidates", "error") {
+		return errors.New("invalid antigravity stream envelope")
+	}
+	if wrapped := root.Get("response"); wrapped.Exists() {
+		if !wrapped.IsObject() || root.Get("candidates").Exists() {
+			return errors.New("ambiguous antigravity stream envelope")
+		}
+		root = wrapped
+	}
+	if root.Get("error").Exists() || !aiCanonicalFields(root, "candidates", "error") {
+		return errors.New("invalid antigravity response")
+	}
+	candidates := root.Get("candidates")
+	if candidates.Exists() && !candidates.IsArray() {
+		return errors.New("invalid antigravity candidates")
+	}
+	items := candidates.Array()
+	if len(items) == 0 {
+		return nil // usage-only tail is independent of native termination
+	}
+	if len(items) != 1 || s.realTerminal {
+		return errors.New("unexpected antigravity candidate after terminal or multiple candidates")
+	}
+	candidate := items[0]
+	if !candidate.IsObject() || !aiCanonicalFields(candidate, "index", "finishReason", "content") {
+		return errors.New("invalid antigravity candidate")
+	}
+	if index := candidate.Get("index"); index.Exists() && (index.Type != gjson.Number || index.Raw != "0") {
+		return errors.New("unsupported antigravity candidate index")
+	}
+	finish := candidate.Get("finishReason")
+	if finish.Exists() {
+		if finish.Type != gjson.String || finish.Str != "STOP" && finish.Str != "MAX_TOKENS" {
+			return errors.New("antigravity response did not finish successfully")
+		}
+		s.realTerminal = true
+	}
+	return nil
 }
 
 func (s *antigravityCompatStreamSession) hasMeaningfulData() bool {
@@ -165,6 +234,10 @@ func (s *antigravityCompatStreamSession) writePreContentKeepalive(now time.Time)
 }
 
 func (s *antigravityCompatStreamSession) finish() (*antigravityStreamResult, error) {
+	if s.strictTerminal && !s.realTerminal {
+		s.adapter.WriteError(s.writer, "incomplete_stream")
+		return s.collectResult(s.writer.Disconnected()), errors.New("antigravity stream ended without a finishReason")
+	}
 	finalEvents, usage := s.processor.Finish()
 	mergeAntigravityCompatUsage(s.usage, usage)
 	s.consumeClaudeEvents(finalEvents)
@@ -303,7 +376,12 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 		c.Status(http.StatusOK)
 	}
 	session := newAntigravityCompatStreamSession(originalModel, startTime, adapter, writer)
+	session.strictTerminal = aiStrictChatTerminal(c)
 	session.preContentKeepaliveInterval = interval
+	var cancelled <-chan struct{}
+	if session.strictTerminal {
+		cancelled = c.Request.Context().Done()
+	}
 	events, stopScanner, maxLineSize := s.startAntigravityCompatScanner(resp.Body)
 	defer stopScanner()
 
@@ -339,12 +417,14 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 
 	for {
 		select {
+		case <-cancelled:
+			return session.collectResult(true), c.Request.Context().Err()
 		case event, open := <-events:
 			if !session.hasMeaningfulData() && !writer.Disconnected() && !time.Now().Before(preContentDeadline) {
 				return preContentTimeout()
 			}
 			if !open {
-				if !session.hasMeaningfulData() && !writer.Disconnected() {
+				if !session.strictTerminal && !session.hasMeaningfulData() && !writer.Disconnected() {
 					return handleAntigravityCompatEmptyStream(c, session)
 				}
 				return session.finish()
@@ -354,7 +434,10 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 			}
 			resetAntigravityCompatTimer(timeoutTimer, timeout)
 			s.observeAntigravityGeminiSSELine(c, event.line)
-			session.consume(event.line)
+			if err := session.consume(event.line); err != nil {
+				writeAntigravityCompatStreamError(c, adapter, writer, "invalid_stream")
+				return session.collectResult(writer.Disconnected()), err
+			}
 
 		case <-timeoutCh:
 			if writer.Disconnected() {

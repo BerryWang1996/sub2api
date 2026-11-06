@@ -72,6 +72,7 @@ var ProviderSet = wire.NewSet(
 	NewCompositeModelRouteRepository,
 	NewAIRoutingPolicyRepository,
 	NewAIRoutingStore,
+	NewAIRoutingResponsesBackgroundRepository,
 	NewAccountRepository,
 	NewAdminAccountRepository,
 	NewScheduledTestPlanRepository,   // 定时测试计划仓储
@@ -108,8 +109,8 @@ var ProviderSet = wire.NewSet(
 	NewChannelMonitorRequestTemplateRepository,
 	NewContentModerationRepository,
 	NewAffiliateRepository,
-	NewUserPlatformQuotaRepository,     // T14: user × platform quota
-	NewUserPlatformQuotaServiceAdapter, // T14: adapter → service.UserPlatformQuotaRepository
+	NewUserPlatformQuotaRepository, // T14: user × platform quota
+	ProvideBackgroundPlatformQuotaAdapter,
 
 	// Cache implementations
 	NewGatewayCache,

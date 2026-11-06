@@ -22,6 +22,13 @@
         {{ t('admin.users.platformQuota.windowMonthly') }}
         <span class="text-gray-900 dark:text-white">{{ fmtUsd(row.monthly_usage_usd) }}/{{ fmtLimit(row.monthly_limit_usd) }}</span>
       </span>
+      <span v-if="(row.background_reserved_usd ?? 0) > 0" class="text-amber-600 dark:text-amber-400">
+        {{ t('admin.users.platformQuota.backgroundReserved', { amount: fmtUsd(row.background_reserved_usd ?? 0) }) }}
+      </span>
+      <span v-if="row.monthly_window_independent" class="text-gray-500 dark:text-gray-400"
+        :title="t('admin.users.platformQuota.monthlySplitWindows', { ordinary: row.ordinary_monthly_window_resets_at ? formatDateTime(row.ordinary_monthly_window_resets_at) : '—', background: row.background_monthly_window_resets_at ? formatDateTime(row.background_monthly_window_resets_at) : '—' })">
+        {{ t('admin.users.platformQuota.monthlySeparateReset') }}
+      </span>
     </div>
   </div>
 </template>
@@ -31,6 +38,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PlatformQuotaItem } from '@/api/admin/users'
 import { listPlatformIds } from '@/constants/platformCatalog'
+import { formatDateTime } from '@/utils/format'
 
 const props = defineProps<{ quotas?: PlatformQuotaItem[] }>()
 const { t } = useI18n()

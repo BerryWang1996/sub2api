@@ -487,6 +487,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
 			eventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			if err := observeAIBackgroundResponsePayload(ctx, aiBackgroundResponseAccountID(account), dataBytes, pendingSSEEventType); err != nil {
+				handleAIRoutingCapacityError(c, err)
+				streamEarlyErr = err
+				return
+			}
 			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
 				(eventType == "response.completed" || eventType == "response.done") {
 				// A later successful terminal is authoritative over a pending bare
@@ -1608,6 +1613,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
+	if err := observeAIBackgroundResponseBody(ctx, aiBackgroundResponseAccountID(account), body); err != nil {
+		handleAIRoutingCapacityError(c, err)
+		return nil, err
+	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -1648,6 +1657,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	}
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
+	if !usageOK && aiBackgroundResponseMayLackUsage(ctx, body) {
+		// Internal result only; body usage remains null/missing and no initial
+		// charge is made. Durable reconciliation owns the authoritative usage.
+		usageOK = true
+	}
 	if !usageOK {
 		if bodyLooksLikeSSE {
 			return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)

@@ -248,6 +248,17 @@ describe('GroupsView duplicate action', () => {
     expect(wrapper.findComponent({name:'AIRoutingDialog'}).props('group')).toMatchObject({id:44,ai_routing:true})
     wrapper.unmount()
   })
+  it('uses the same routing action label for AI and static Composite groups', async () => {
+    const ai = {...sourceGroup, id:44, platform:'composite' as const, ai_routing:true}
+    listGroups.mockResolvedValueOnce({items:[ai,{...sourceGroup,platform:'composite'}],total:2,page:1,page_size:20,pages:1})
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="group-ai-routing"]').text()).toBe('admin.groups.compositeRoutes.action')
+    expect(wrapper.get('[data-testid="group-composite-routes"]').text()).toBe('admin.groups.compositeRoutes.action')
+    await wrapper.get('[data-testid="group-ai-routing"]').trigger('click')
+    expect(wrapper.getComponent({name:'AIRoutingDialog'}).props('group')).toMatchObject({id:44,ai_routing:true})
+    wrapper.unmount()
+  })
   it('allows disabling OpenAI Messages execution before creating the AI group', async () => {
     vi.mocked(adminAPI.groups.create).mockResolvedValueOnce({...sourceGroup, id:45, ai_routing:true})
     const wrapper=mountView()

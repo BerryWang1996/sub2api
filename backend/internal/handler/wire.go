@@ -117,6 +117,7 @@ func ProvideGatewayHandler(
 	aiPolicies *service.AIRoutingPolicyService,
 	aiDecider *service.AIRoutingDecider,
 	aiStore service.AIRoutingStore,
+	aiBackground *service.AIRoutingResponsesBackgroundService,
 ) *GatewayHandler {
 	h := NewGatewayHandler(gatewayService, openAIGatewayService, geminiCompatService, antigravityGatewayService,
 		userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool,
@@ -124,6 +125,7 @@ func ProvideGatewayHandler(
 	h.securityAuditCoordinator = coordinator
 	h.geminiCachedContentService = geminiCachedContentService
 	h.SetAIRouting(aiPolicies, aiDecider, aiStore)
+	h.aiBackground = aiBackground
 	return h
 }
 

@@ -47,6 +47,7 @@ func (f *aiHTTPChooser) Decide(_ context.Context, _ *service.AIRoutingPolicy, ta
 
 type aiHTTPFixture struct {
 	engine                           *gin.Engine
+	runtime                          *aiRoutingRuntime
 	group                            *service.Group
 	policies                         *aiHTTPPolicy
 	chooser                          *aiHTTPChooser
@@ -55,10 +56,13 @@ type aiHTTPFixture struct {
 	requireDecisionSlot              bool
 	boundObserved                    int64
 	rewritten                        string
+	forwardedBody                    []byte
 	scope                            service.CompositeRouteScope
 	hasScope                         bool
 	keyID                            int64
 	rejectAdmission                  bool
+	responses                        func(*gin.Context, bool, bool)
+	chat                             func(*gin.Context, bool, bool)
 }
 
 func newAIHTTPFixture(t *testing.T) *aiHTTPFixture {
@@ -76,6 +80,7 @@ func newAIHTTPFixture(t *testing.T) *aiHTTPFixture {
 			{ID: "B", Enabled: true, Platform: service.PlatformOpenAI, Model: "picked-executor", TargetGroupID: &targetGroup},
 		}}
 	runtime := &aiRoutingRuntime{policies: f.policies, decider: f.chooser, store: store}
+	f.runtime = runtime
 	runtime.eligible = func(_ context.Context, key *service.APIKey, p *service.AIRoutingPolicy, _ service.AIRoutingRequest, _ string, bound int64) []service.AIRoutingCandidate {
 		require.Equal(t, groupID, key.Group.ID)
 		require.Equal(t, p.GroupID, key.Group.ID)
@@ -101,6 +106,7 @@ func newAIHTTPFixture(t *testing.T) *aiHTTPFixture {
 		f.executions++
 		raw, err := io.ReadAll(c.Request.Body)
 		require.NoError(t, err)
+		f.forwardedBody = append([]byte(nil), raw...)
 		var req struct {
 			Model  string
 			Stream bool
@@ -113,6 +119,14 @@ func newAIHTTPFixture(t *testing.T) *aiHTTPFixture {
 			require.Equal(t, f.admissions, f.releases, "decision user slot must be released before downstream execution")
 		}
 		c.Set(opsAccountIDKey, int64(75))
+		if strings.HasPrefix(c.FullPath(), "/v1/responses") && f.responses != nil {
+			f.responses(c, req.Stream, len(req.Tools) > 0)
+			return
+		}
+		if c.FullPath() == "/v1/chat/completions" && f.chat != nil {
+			f.chat(c, req.Stream, len(req.Tools) > 0)
+			return
+		}
 		if len(req.Tools) == 0 {
 			c.JSON(http.StatusOK, gin.H{"content": []any{}})
 			return
@@ -128,7 +142,7 @@ func newAIHTTPFixture(t *testing.T) *aiHTTPFixture {
 			_, _ = c.Writer.Write([]byte(`"id":"tool-1"}]}`))
 		}
 	}
-	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/responses", "/antigravity/v1/messages"} {
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/chat/completions", "/antigravity/v1/messages"} {
 		f.engine.POST(path, execute)
 	}
 	return f
@@ -211,7 +225,7 @@ func TestAIRoutingHTTPGatesAndStaticCompatibility(t *testing.T) {
 		{"disabled", "/v1/messages", func(f *aiHTTPFixture) { f.policies.policy.Enabled = false }, 403, "ai_routing_disabled", false},
 		{"missing-policy", "/v1/messages", func(f *aiHTTPFixture) { f.policies.policy = nil }, 503, "ai_policy_unavailable", false},
 		{"lookup-failure", "/v1/messages", func(f *aiHTTPFixture) { f.policies.err = errors.New("failed") }, 503, "ai_policy_unavailable", false},
-		{"unsupported", "/v1/responses", nil, 400, "ai_routing_endpoint_unsupported", false},
+		{"disabled-endpoint", "/v1/responses", nil, 400, "ai_routing_endpoint_disabled", false},
 		{"forced-provider", "/antigravity/v1/messages", nil, 400, "ai_routing_endpoint_unsupported", false},
 		{"nested", "/v1/messages", nil, 400, "ai_routing_loop", true},
 		{"claude-code-only", "/v1/messages", func(f *aiHTTPFixture) { f.group.ClaudeCodeOnly = true }, 403, "permission_error", false},

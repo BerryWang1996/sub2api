@@ -22,6 +22,14 @@ function item(over: Partial<PlatformQuotaItem> & { platform: PlatformQuotaItem['
 }
 
 describe('UserPlatformQuotaCell', () => {
+  it('separates pending reservations from actual usage and identifies independent monthly resets', () => {
+    const w = mount(UserPlatformQuotaCell, { props: { quotas: [item({ platform: 'openai', monthly_limit_usd: 10, monthly_usage_usd: 4, background_reserved_usd: 2, monthly_window_independent: true, ordinary_monthly_window_resets_at: '2026-12-01T00:00:00Z', background_monthly_window_resets_at: '2026-11-28T00:00:00Z' })] } })
+    expect(w.text()).toContain('4/10')
+    expect(w.text()).not.toContain('6/10')
+    expect(w.text()).toContain('admin.users.platformQuota.backgroundReserved')
+    expect(w.text()).toContain('admin.users.platformQuota.monthlySeparateReset')
+    expect(w.get('[title]').attributes('title')).toBe('admin.users.platformQuota.monthlySplitWindows')
+  })
   it('quotas 为 undefined 时渲染加载占位 …', () => {
     const w = mount(UserPlatformQuotaCell, { props: { quotas: undefined } })
     expect(w.text()).toContain('…')

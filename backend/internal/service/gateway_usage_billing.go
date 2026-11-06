@@ -585,6 +585,11 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 	if !stream {
 		return ctx, func() {}
 	}
+	// An AI WebSocket HTTP bridge owns one cancellable lane, not a detached
+	// HTTP client drain. Keep cancellation/deadline so it releases its slot.
+	if requirements, ok := AIRoutingExecutionRequirementsFromContext(ctx); ok && requirements.Endpoint == AIRoutingEndpointResponsesWS {
+		return ctx, func() {}
+	}
 	return context.WithoutCancel(ctx), func() {}
 }
 

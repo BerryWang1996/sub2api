@@ -4,6 +4,7 @@
     <Select
       :model-value="modelValue.mode"
       :options="modeOptions"
+      :disabled="disabled"
       :aria-label="t('admin.groups.compositeRoutes.destinationMode')"
       data-testid="destination-mode"
       @update:model-value="changeMode($event as CompositeDestinationMode)"
@@ -20,6 +21,7 @@
       </div>
       <input
         v-model="keyword"
+        :disabled="disabled"
         class="input"
         type="search"
         :aria-label="t('admin.groups.compositeRoutes.destinationSearch')"
@@ -35,7 +37,7 @@
           :key="target.id"
           type="button"
           class="block w-full px-3 py-2 text-left text-sm hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700"
-          :disabled="target.status !== 'active' || target.schedulable === false"
+          :disabled="disabled || target.status !== 'active' || target.schedulable === false"
           :data-testid="`destination-option-${target.id}`"
           @click="selectTarget(target)"
         >
@@ -44,9 +46,9 @@
         </button>
       </div>
       <div v-if="pages > 1" class="flex items-center gap-2 text-xs">
-        <button type="button" class="btn btn-secondary" :disabled="page <= 1 || loading" @click="page--">{{ t('admin.groups.aiRouting.previous') }}</button>
+        <button type="button" class="btn btn-secondary" :disabled="disabled || page <= 1 || loading" @click="page--">{{ t('admin.groups.aiRouting.previous') }}</button>
         {{ page }} / {{ pages }}
-        <button type="button" class="btn btn-secondary" :disabled="page >= pages || loading" @click="page++">{{ t('admin.groups.aiRouting.next') }}</button>
+        <button type="button" class="btn btn-secondary" :disabled="disabled || page >= pages || loading" @click="page++">{{ t('admin.groups.aiRouting.next') }}</button>
       </div>
       <p v-else-if="!explicitOnly" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.groups.compositeRoutes.destinationResultsHint') }}</p>
     </template>
@@ -85,6 +87,7 @@ const props = defineProps<{
   platform: Exclude<GroupPlatform, 'composite'>
   sourceGroupId: number
   explicitOnly?: boolean
+  disabled?: boolean
   decisionEngine?: 'generic' | 'jev'
 }>()
 const emit = defineEmits<{
@@ -170,9 +173,11 @@ watch(page, searchTargets)
 watch(selectedId, () => { showValidationError.value = false })
 
 const changeMode = (mode: CompositeDestinationMode) => {
+  if (props.disabled) return
   if (mode !== props.modelValue.mode) emit('update:modelValue', changeCompositeDestinationMode(mode))
 }
 const selectTarget = (target: TargetOption) => {
+  if (props.disabled) return
   emit('update:modelValue', {
     mode: props.modelValue.mode,
     target_group_id: props.modelValue.mode === 'group' ? target.id : null,

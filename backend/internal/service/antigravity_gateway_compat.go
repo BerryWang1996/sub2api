@@ -49,6 +49,7 @@ type antigravityCompatUpstreamCall struct {
 	proxyURL     string
 	accessToken  string
 	geminiBody   []byte
+	geminiState  *geminiResponsesForwardOptions
 }
 
 // ForwardAsChatCompletions 使用 Antigravity 原生 OAuth 账号转发 Chat Completions 请求。
@@ -228,6 +229,20 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	if geminiImageGenerationDenied(c, nil, request.originalModel, mappedModel) {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", ImageGenerationPermissionMessage())
 	}
+	var geminiState *geminiResponsesForwardOptions
+	if aiStrictChatTerminal(c) && strings.HasPrefix(strings.ToLower(mappedModel), "gemini-") {
+		var err error
+		request, geminiState, err = s.prepareAIAntigravityGeminiState(ctx, c, request)
+		if err != nil {
+			if !handleAIRoutingCapacityError(c, err) {
+				_ = s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			}
+			return nil, err
+		}
+		if err := json.Unmarshal(request.claudeBody, &claudeRequest); err != nil {
+			return nil, err
+		}
+	}
 
 	if s.tokenProvider == nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadGateway, "api_error", "Antigravity token provider not configured")
@@ -249,6 +264,15 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	if err != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request")
 	}
+	if geminiState != nil {
+		geminiBody, err = geminiState.prepare(geminiBody)
+		if err != nil {
+			if !handleAIRoutingCapacityError(c, err) {
+				_ = s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			}
+			return nil, err
+		}
+	}
 
 	request.reasoningEffort = ApplyThinkingEnabledFallback(request.reasoningEffort, request.originalBody, mappedModel)
 	return &antigravityCompatUpstreamCall{
@@ -258,6 +282,7 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 		proxyURL:     antigravityCompatProxyURL(account),
 		accessToken:  accessToken,
 		geminiBody:   geminiBody,
+		geminiState:  geminiState,
 	}, nil
 }
 
@@ -370,6 +395,9 @@ func antigravityCompatProxyURL(account *Account) string {
 }
 
 func (s *AntigravityGatewayService) handleAntigravityCompatTransportError(c *gin.Context, err error) error {
+	if handleAIRoutingCapacityError(c, err) {
+		return err
+	}
 	if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 		return &UpstreamFailoverError{
 			StatusCode:        http.StatusServiceUnavailable,
@@ -399,7 +427,7 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 		c.Header("x-request-id", requestID)
 	}
 	streamResult, err := s.consumeAntigravityCompatSuccess(c, call, resp)
-	if err != nil {
+	if err != nil && (!aiStrictChatTerminal(c) || streamResult == nil) {
 		return nil, err
 	}
 	if streamResult.usage == nil {
@@ -419,7 +447,7 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 		FirstTokenMs:                  streamResult.firstTokenMs,
 		ReasoningEffort:               call.request.reasoningEffort,
 		ClientDisconnect:              streamResult.clientDisconnect,
-	}, nil
+	}, err
 }
 
 func (s *AntigravityGatewayService) consumeAntigravityCompatSuccess(
@@ -427,6 +455,13 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatSuccess(
 	call *antigravityCompatUpstreamCall,
 	resp *http.Response,
 ) (*antigravityStreamResult, error) {
+	if call.geminiState != nil {
+		result, err := call.geminiState.consume(resp, true)
+		if result == nil {
+			return nil, err
+		}
+		return &antigravityStreamResult{usage: result.usage, firstTokenMs: result.firstTokenMs, clientDisconnect: result.clientDisconnect}, err
+	}
 	if call.request.clientStream {
 		if call.request.protocol == antigravityCompatChatCompletions {
 			return s.handleChatCompletionsStreamingFromAntigravity(

@@ -25,6 +25,20 @@ func TestRequestMaxOutputTokens(t *testing.T) {
 	require.Equal(t, 0, requestMaxOutputTokens([]byte(`{}`)))
 }
 
+func TestAIChatInflightExtractsPerChoiceLimitOnce(t *testing.T) {
+	for _, extra := range []string{`"max_completion_tokens":100,`, ""} {
+		req := tokenInflightEstimate("gpt", []byte(`{`+extra+`"messages":[],"n":3}`))
+		require.Equal(t, 3, req.OutputChoices)
+		if extra != "" {
+			require.Equal(t, 100, req.MaxTokens)
+		} else {
+			require.Zero(t, req.MaxTokens)
+		}
+	}
+	require.Equal(t, 1, tokenInflightEstimate("gpt", []byte(`{"input":"hi","n":3}`)).OutputChoices)
+	require.Equal(t, int(^uint(0)>>1), tokenInflightEstimate("gpt", []byte(`{"messages":[],"n":18446744073709551615}`)).OutputChoices)
+}
+
 type countingEstimator struct {
 	calls  int
 	cost   float64

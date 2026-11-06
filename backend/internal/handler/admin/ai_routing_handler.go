@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,12 +12,37 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func ProvideAIRoutingGroupHandler(admin service.AdminService, dash *service.DashboardService, cap *service.GroupCapacityService, cfg *config.Config, p *service.AIRoutingPolicyService, d *service.AIRoutingDecider, aiStore service.AIRoutingStore) *GroupHandler {
+func ProvideAIRoutingGroupHandler(admin service.AdminService, dash *service.DashboardService, cap *service.GroupCapacityService, cfg *config.Config, p *service.AIRoutingPolicyService, d *service.AIRoutingDecider, aiStore service.AIRoutingStore, background *service.AIRoutingResponsesBackgroundService) *GroupHandler {
 	h := NewGroupHandlerWithConfig(admin, dash, cap, cfg)
 	h.aiPolicies = p
 	h.aiDecider = d
 	h.aiStore = aiStore
+	h.aiBackground = background
 	return h
+}
+
+func (h *GroupHandler) AIRoutingBackgroundJobs(c *gin.Context) {
+	id, ok := h.aiGroupID(c)
+	if !ok {
+		return
+	}
+	if _, err := h.aiPolicies.Get(c.Request.Context(), id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	status := c.Query("status")
+	switch status {
+	case "", service.AIBackgroundAdmitted, service.AIBackgroundSubmitting, service.AIBackgroundSubmissionUnknown, service.AIBackgroundActive, service.AIBackgroundUsageUnknown, service.AIBackgroundReady, service.AIBackgroundSettled, service.AIBackgroundReleased:
+	default:
+		response.BadRequest(c, "Invalid background job status")
+		return
+	}
+	rows, err := h.aiBackground.Diagnostics(c.Request.Context(), id, status, 50)
+	if err != nil {
+		response.InternalError(c, "Background response diagnostics unavailable")
+		return
+	}
+	response.Success(c, gin.H{"items": rows})
 }
 
 func (h *GroupHandler) AIRoutingDecisions(c *gin.Context) {
@@ -60,16 +86,24 @@ func (h *GroupHandler) GetAIRouting(c *gin.Context) {
 }
 
 type aiPolicyEdit struct {
-	Revision *int64                   `json:"revision"`
-	Policy   *service.AIRoutingPolicy `json:"policy"`
-	Sample   string                   `json:"sample"`
+	Revision       *int64                   `json:"revision"`
+	Policy         *service.AIRoutingPolicy `json:"policy"`
+	Sample         string                   `json:"sample"`
+	SampleEndpoint string                   `json:"sample_endpoint"`
 }
 
 func bindAIPolicyEdit(c *gin.Context, needRevision, needPolicy bool) (aiPolicyEdit, bool) {
 	var req aiPolicyEdit
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
-	if err := c.ShouldBindJSON(&req); err != nil || needRevision && (req.Revision == nil || *req.Revision < 0) || needPolicy && req.Policy == nil || len(req.Sample) > 16384 {
+	if err := c.ShouldBindJSON(&req); err != nil || needRevision && (req.Revision == nil || *req.Revision < 0) || needPolicy && req.Policy == nil || len(req.Sample) > 128<<10 {
 		response.BadRequest(c, "Invalid AI routing request or sample length")
+		return req, false
+	}
+	if req.SampleEndpoint == "" {
+		req.SampleEndpoint = service.CompositeRouteEndpointMessages
+	}
+	if req.SampleEndpoint != service.CompositeRouteEndpointMessages && req.SampleEndpoint != service.CompositeRouteEndpointResponses && req.SampleEndpoint != service.CompositeRouteEndpointChatCompletions && req.SampleEndpoint != service.AIRoutingEndpointResponsesWS && req.SampleEndpoint != service.CompositeRouteEndpointGemini {
+		response.BadRequest(c, "Unsupported AI routing sample endpoint")
 		return req, false
 	}
 	return req, true
@@ -121,7 +155,20 @@ func (h *GroupHandler) PreviewAIRouting(c *gin.Context) {
 	if !ok {
 		return
 	}
-	v, e := h.aiPolicies.Preview(c.Request.Context(), id, *r.Policy)
+	if !r.Policy.AllowsEndpoint(r.SampleEndpoint) {
+		response.BadRequest(c, "Sample endpoint is not enabled by this policy")
+		return
+	}
+	req, e := service.NewAIRoutingSampleRequestForEndpoint(r.Policy, r.Sample, r.SampleEndpoint)
+	if e != nil {
+		if errors.Is(e, service.ErrAIRoutingBackgroundNotReleased) {
+			response.ErrorFrom(c, e)
+			return
+		}
+		response.BadRequest(c, "Invalid AI routing sample for "+r.SampleEndpoint)
+		return
+	}
+	v, e := h.aiPolicies.PreviewRequest(c.Request.Context(), id, *r.Policy, req)
 	if e != nil {
 		response.ErrorFrom(c, e)
 		return
@@ -140,7 +187,20 @@ func (h *GroupHandler) TestAIRouting(c *gin.Context) {
 	p := r.Policy
 	p.GroupID = id
 	ctx := c.Request.Context()
-	v, e := h.aiPolicies.Preview(ctx, id, *p)
+	if !p.AllowsEndpoint(r.SampleEndpoint) {
+		response.BadRequest(c, "Sample endpoint is not enabled by this policy")
+		return
+	}
+	req, e := service.NewAIRoutingSampleRequestForEndpoint(p, r.Sample, r.SampleEndpoint)
+	if e != nil {
+		if errors.Is(e, service.ErrAIRoutingBackgroundNotReleased) {
+			response.ErrorFrom(c, e)
+			return
+		}
+		response.BadRequest(c, "Invalid AI routing sample for "+r.SampleEndpoint)
+		return
+	}
+	v, e := h.aiPolicies.PreviewRequest(ctx, id, *p, req)
 	if e != nil {
 		response.ErrorFrom(c, e)
 		return
@@ -169,17 +229,18 @@ func (h *GroupHandler) TestAIRouting(c *gin.Context) {
 	}
 	// Single-choice fast path mirrors runtime and discloses that no decision fee was incurred.
 	if len(candidates) == 1 {
-		response.Success(c, gin.H{"candidate_id": candidates[0].ID, "model": "", "protocol": "", "input_tokens": 0, "output_tokens": 0, "elapsed_ms": 0, "external_call": false, "reason": "single"})
+		response.Success(c, gin.H{"sample_endpoint": r.SampleEndpoint, "candidate_id": candidates[0].ID, "model": "", "protocol": "", "input_tokens": 0, "output_tokens": 0, "elapsed_ms": 0, "external_call": false, "reason": "single"})
 		return
 	}
-	task := service.AIRoutingSampleTask(p.ContextMode, r.Sample)
 	start := time.Now()
-	chosen, result, reason, e := service.ChooseAIRoutingCandidate(service.WithAIRoutingAdminSample(ctx), p, service.AIRoutingRequest{Task: task}, candidates, h.aiDecider, c.Request.Host)
+	chosen, result, reason, e := service.ChooseAIRoutingCandidate(service.WithAIRoutingAdminSample(ctx), p, req, candidates, h.aiDecider, c.Request.Host)
 	if e != nil {
-		response.Error(c, http.StatusBadGateway, "Decision failed or returned an ineligible candidate")
-		return
+		chosen = service.AIRoutingCandidate{}
+		if result.FailureReason == "" {
+			result.FailureReason = "decision_error"
+		}
 	}
-	response.Success(c, gin.H{"candidate_id": chosen.ID, "model": result.Model, "protocol": result.Protocol, "input_tokens": result.InputTokens, "output_tokens": result.OutputTokens, "elapsed_ms": time.Since(start).Milliseconds(), "external_call": true, "reason": reason, "failure_reason": result.FailureReason})
+	response.Success(c, gin.H{"sample_endpoint": r.SampleEndpoint, "candidate_id": chosen.ID, "model": result.Model, "protocol": result.Protocol, "input_tokens": result.InputTokens, "output_tokens": result.OutputTokens, "elapsed_ms": time.Since(start).Milliseconds(), "external_call": result.DecisionCalls > 0 || (p.ContextMode != "bounded_history" && result.Model != ""), "reason": reason, "failure_reason": result.FailureReason, "context": result.Context, "decision_calls": result.DecisionCalls, "stages": result.Calls})
 }
 func (h *GroupHandler) AIRoutingModels(c *gin.Context) {
 	id, ok := h.aiGroupID(c)

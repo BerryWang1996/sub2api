@@ -201,6 +201,9 @@ func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
 //   - 调用方必须关闭 resp.Body，否则会导致 inFlight 计数泄漏
 //   - inFlight > 0 的客户端不会被淘汰，确保活跃请求不被中断
 func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	if err := service.CheckAIRoutingOutboundRequest(req, accountID); err != nil {
+		return nil, err
+	}
 	applyGrokCLIProxyHeaders(req)
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
@@ -218,7 +221,8 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 
 	// 执行请求
 	client := s.httpClientForUpstreamRequest(entry.client, req)
-	client = httpClientWithGrokAccessDeniedFallback(client)
+	client = httpClientWithGrokAccessDeniedFallback(client, accountID)
+	client = withAIBackgroundSubmissionTransport(client, req, accountID)
 	resp, err := doUpstreamRequest(client, req)
 	if err != nil {
 		s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
@@ -252,6 +256,9 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if req != nil && req.URL != nil && strings.EqualFold(req.URL.Scheme, "http") {
 		return s.Do(req, proxyURL, accountID, accountConcurrency)
 	}
+	if err := service.CheckAIRoutingOutboundRequest(req, accountID); err != nil {
+		return nil, err
+	}
 	applyGrokCLIProxyHeaders(req)
 	upstreamProfile := service.HTTPUpstreamProfileDefault
 	if req != nil {
@@ -279,7 +286,8 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	}
 
 	client := s.httpClientForUpstreamRequest(entry.client, req)
-	client = httpClientWithGrokAccessDeniedFallback(client)
+	client = httpClientWithGrokAccessDeniedFallback(client, accountID)
+	client = withAIBackgroundSubmissionTransport(client, req, accountID)
 	resp, err := doUpstreamRequest(client, req)
 	if err != nil {
 		atomic.AddInt64(&entry.inFlight, -1)
@@ -354,6 +362,12 @@ func (s *httpUpstreamService) httpClientForUpstreamRequest(client *http.Client, 
 	}
 	ctx := req.Context()
 	switch {
+	case service.HasAIRoutingOutboundGuard(ctx):
+		clone := *client
+		clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return &service.AIRoutingCapacityError{Check: service.AIRoutingCapabilityCheck{Reason: "execution_redirect_unsupported"}}
+		}
+		return &clone
 	case service.HTTPUpstreamRedirectsDisabled(ctx):
 		clone := *client
 		clone.CheckRedirect = func(*http.Request, []*http.Request) error {
@@ -376,10 +390,11 @@ func (s *httpUpstreamService) httpClientForUpstreamRequest(client *http.Client, 
 // remains valid on the official API. Other entitlement failures stay on the
 // original response so account scheduling semantics do not change.
 type grokAccessDeniedFallbackTransport struct {
-	base http.RoundTripper
+	base      http.RoundTripper
+	accountID int64
 }
 
-func httpClientWithGrokAccessDeniedFallback(client *http.Client) *http.Client {
+func httpClientWithGrokAccessDeniedFallback(client *http.Client, accountID int64) *http.Client {
 	if client == nil {
 		return nil
 	}
@@ -388,7 +403,7 @@ func httpClientWithGrokAccessDeniedFallback(client *http.Client) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	clone.Transport = &grokAccessDeniedFallbackTransport{base: base}
+	clone.Transport = &grokAccessDeniedFallbackTransport{base: base, accountID: accountID}
 	return &clone
 }
 
@@ -406,6 +421,15 @@ func (t *grokAccessDeniedFallbackTransport) RoundTrip(req *http.Request) (*http.
 	fallbackReq, err := newGrokOfficialAPIFallbackRequest(req)
 	if err != nil {
 		return resp, nil
+	}
+	if err := service.CheckAIRoutingOutboundRequest(fallbackReq, t.accountID); err != nil {
+		if fallbackReq.Body != nil {
+			_ = fallbackReq.Body.Close()
+		}
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, err
 	}
 	fallbackResp, fallbackErr := t.base.RoundTrip(fallbackReq)
 	if fallbackErr != nil {

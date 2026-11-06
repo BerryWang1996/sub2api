@@ -12,33 +12,39 @@ import (
 )
 
 type AIRoutingPolicy struct {
-	GroupID           int64                `json:"group_id"`
-	Enabled           bool                 `json:"enabled"`
-	Version           int64                `json:"version"`
-	Engine            string               `json:"engine"`
-	DecisionGroupID   *int64               `json:"decision_group_id"`
-	DecisionAccountID *int64               `json:"decision_account_id"`
-	DecisionPlatform  string               `json:"decision_platform"`
-	DecisionModel     string               `json:"decision_model"`
-	Prompt            string               `json:"prompt"`
-	ContextMode       string               `json:"context_mode"`
-	TimeoutMS         int                  `json:"timeout_ms"`
-	FallbackID        string               `json:"fallback_id"`
-	Candidates        []AIRoutingCandidate `json:"candidates"`
+	GroupID           int64                  `json:"group_id"`
+	SchemaVersion     int                    `json:"schema_version,omitempty"`
+	EnabledEndpoints  []string               `json:"enabled_endpoints,omitempty"`
+	Enabled           bool                   `json:"enabled"`
+	Version           int64                  `json:"version"`
+	Engine            string                 `json:"engine"`
+	DecisionGroupID   *int64                 `json:"decision_group_id"`
+	DecisionAccountID *int64                 `json:"decision_account_id"`
+	DecisionPlatform  string                 `json:"decision_platform"`
+	DecisionModel     string                 `json:"decision_model"`
+	Prompt            string                 `json:"prompt"`
+	ContextMode       string                 `json:"context_mode"`
+	ContextBudget     AIRoutingContextLimits `json:"context_budget,omitempty"`
+	TimeoutMS         int                    `json:"timeout_ms"`
+	FallbackID        string                 `json:"fallback_id"`
+	Candidates        []AIRoutingCandidate   `json:"candidates"`
 }
 type AIRoutingCandidate struct {
-	ID              string `json:"id"`
-	Platform        string `json:"platform"`
-	Model           string `json:"model"`
-	Description     string `json:"description"`
-	CostTier        string `json:"cost_tier,omitempty"`
-	MaxInputTokens  int    `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
-	DisableTools    bool   `json:"disable_tools,omitempty"`
-	DisableImages   bool   `json:"disable_images,omitempty"`
-	TargetGroupID   *int64 `json:"target_group_id"`
-	TargetAccountID *int64 `json:"target_account_id"`
-	Enabled         bool   `json:"enabled"`
+	ID                  string `json:"id"`
+	Platform            string `json:"platform"`
+	Model               string `json:"model"`
+	Description         string `json:"description"`
+	CostTier            string `json:"cost_tier,omitempty"`
+	MaxInputTokens      int    `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens     int    `json:"max_output_tokens,omitempty"`
+	DisableTools        bool   `json:"disable_tools,omitempty"`
+	DisableImages       bool   `json:"disable_images,omitempty"`
+	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
+	SupportsTools       *bool  `json:"supports_tools,omitempty"`
+	SupportsImages      *bool  `json:"supports_images,omitempty"`
+	TargetGroupID       *int64 `json:"target_group_id"`
+	TargetAccountID     *int64 `json:"target_account_id"`
+	Enabled             bool   `json:"enabled"`
 }
 type AIRoutingPolicyState struct {
 	Draft     AIRoutingPolicy  `json:"draft"`
@@ -55,10 +61,11 @@ type AIRoutingPolicyRepository interface {
 }
 
 var ErrAIRevision = errs.Conflict("AI_ROUTING_REVISION_CONFLICT", "Policy was edited by another admin; reload and retry")
+var ErrAISchemaReloadRequired = errs.Conflict("AI_ROUTING_SCHEMA_RELOAD_REQUIRED", "Reload the current policy before saving with schema version 2")
 var ErrNotAIGroup = errs.BadRequest("NOT_AI_ROUTING_GROUP", "Group does not use AI routing")
 
 func NewAIRoutingDraft(id int64) AIRoutingPolicy {
-	return AIRoutingPolicy{GroupID: id, Engine: "generic", ContextMode: "metadata", TimeoutMS: 3000, Candidates: []AIRoutingCandidate{}}
+	return AIRoutingPolicy{GroupID: id, Engine: "generic", ContextMode: "bounded_history", TimeoutMS: 15000, Candidates: []AIRoutingCandidate{}}
 }
 
 type AIRoutingPolicyService struct {
@@ -150,11 +157,19 @@ func (s *AIRoutingPolicyService) LocalModels(ctx context.Context, id int64, plat
 	return models, nil
 }
 func validateAIRoutingDraft(p AIRoutingPolicy) error {
+	if err := p.validateClientEndpoints(); err != nil {
+		return err
+	}
 	if p.Engine != "generic" && p.Engine != "jev" {
 		return aiPolicyError("Unknown decision engine")
 	}
-	if p.ContextMode != "metadata" && p.ContextMode != "task_excerpt" {
+	if p.ContextMode != "metadata" && p.ContextMode != "task_excerpt" && p.ContextMode != "bounded_history" {
 		return aiPolicyError("Unknown context mode")
+	}
+	if p.ContextMode == "bounded_history" {
+		if _, err := NormalizeAIRoutingContextLimits(p.ContextBudget); err != nil {
+			return aiPolicyError(err.Error())
+		}
 	}
 	if p.TimeoutMS < 100 || p.TimeoutMS > 60000 {
 		return aiPolicyError("Decision timeout must be 100–60000 ms")
@@ -168,8 +183,14 @@ func validateAIRoutingDraft(p AIRoutingPolicy) error {
 	seen := map[string]bool{}
 	destinations := map[string]bool{}
 	for _, c := range p.Candidates {
-		if c.MaxInputTokens < 0 || c.MaxOutputTokens < 0 {
+		if c.MaxInputTokens < 0 || c.MaxOutputTokens < 0 || c.ContextWindowTokens < 0 {
 			return aiPolicyError("Candidate token limits must be nonnegative")
+		}
+		if c.ContextWindowTokens > 0 && c.MaxOutputTokens > c.ContextWindowTokens {
+			return aiPolicyError("Candidate output limit exceeds its context window")
+		}
+		if c.ID == AIRoutingControlInsufficient || c.ID == AIRoutingControlAmbiguous {
+			return aiPolicyError("Candidate ID is reserved for decision control")
 		}
 		if !aiChoiceID.MatchString(c.ID) || seen[c.ID] {
 			return aiPolicyError("Choice IDs must be unique short identifiers")
@@ -205,12 +226,17 @@ func (s *AIRoutingPolicyService) SaveDraft(ctx context.Context, id, rev int64, p
 	if rev != st.Revision {
 		return nil, ErrAIRevision
 	}
+	if st.Draft.SchemaVersion >= AIRoutingCurrentSchemaVersion && p.SchemaVersion < AIRoutingCurrentSchemaVersion {
+		return nil, ErrAISchemaReloadRequired
+	}
 	p.GroupID = id
 	p.Enabled = false
 	p.Version = rev + 1
 	if e := validateAIRoutingDraft(p); e != nil {
 		return nil, e
 	}
+	p.EnabledEndpoints = p.ClientEndpoints()
+	p.SchemaVersion = AIRoutingCurrentSchemaVersion
 	return s.repo.Write(ctx, id, rev, p, st.Published, "")
 }
 
@@ -219,12 +245,23 @@ type AIRoutingExclusion struct {
 	Reason string `json:"reason"`
 }
 type AIRoutingPreview struct {
-	Eligible     []string             `json:"eligible"`
-	Excluded     []AIRoutingExclusion `json:"excluded"`
-	ExternalCall bool                 `json:"external_call"`
+	SampleEndpoint string                       `json:"sample_endpoint,omitempty"`
+	Eligible       []string                     `json:"eligible"`
+	Excluded       []AIRoutingExclusion         `json:"excluded"`
+	ExternalCall   bool                         `json:"external_call"`
+	Context        *AIRoutingHistoryDiagnostics `json:"context,omitempty"`
+	NeedsDecision  bool                         `json:"needs_decision"`
+	// Only explicit administrator samples return redacted visible text. Runtime
+	// traces and persisted policy state never contain this projection.
+	SampleSpans    []AIRoutingHistorySpan       `json:"sample_spans,omitempty"`
+	CapacityChecks []AIRoutingCandidateCapacity `json:"capacity_checks,omitempty"`
 }
 
 func (s *AIRoutingPolicyService) Preview(ctx context.Context, id int64, p AIRoutingPolicy) (*AIRoutingPreview, error) {
+	return s.PreviewForEndpoint(ctx, id, p, CompositeRouteEndpointMessages)
+}
+
+func (s *AIRoutingPolicyService) PreviewForEndpoint(ctx context.Context, id int64, p AIRoutingPolicy, endpoint string) (*AIRoutingPreview, error) {
 	if _, err := s.Get(ctx, id); err != nil {
 		return nil, err
 	}
@@ -232,13 +269,16 @@ func (s *AIRoutingPolicyService) Preview(ctx context.Context, id int64, p AIRout
 	if err := validateAIRoutingDraft(p); err != nil {
 		return nil, err
 	}
+	if !p.AllowsEndpoint(endpoint) {
+		return nil, aiPolicyError("Client endpoint is not enabled by this policy")
+	}
 	group, err := s.groups.GetByIDLite(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	out := &AIRoutingPreview{Eligible: []string{}, Excluded: []AIRoutingExclusion{}}
+	out := &AIRoutingPreview{SampleEndpoint: endpoint, Eligible: []string{}, Excluded: []AIRoutingExclusion{}}
 	for _, c := range p.Candidates {
-		reason := s.candidateIssue(ctx, group, c)
+		reason := s.candidateIssueForEndpoint(ctx, group, &p, c, endpoint)
 		if reason != "" {
 			out.Excluded = append(out.Excluded, AIRoutingExclusion{c.ID, reason})
 		} else {
@@ -247,11 +287,11 @@ func (s *AIRoutingPolicyService) Preview(ctx context.Context, id int64, p AIRout
 	}
 	return out, nil
 }
-func (s *AIRoutingPolicyService) candidateIssue(ctx context.Context, group *Group, c AIRoutingCandidate) string {
+func (s *AIRoutingPolicyService) candidateIssueForEndpoint(ctx context.Context, group *Group, policy *AIRoutingPolicy, c AIRoutingCandidate, endpoint string) string {
 	if !c.Enabled {
 		return "disabled"
 	}
-	if c.Platform == PlatformOpenAI && !group.AllowMessagesDispatch {
+	if endpoint == CompositeRouteEndpointMessages && c.Platform == PlatformOpenAI && !group.AllowMessagesDispatch {
 		return "enable Messages dispatch on the source group to execute OpenAI models"
 	}
 	if strings.TrimSpace(c.Model) == "" || !aiRoutingModelProducesText(c.Model) || !isConcreteRequestPlatform(c.Platform) || c.Platform == PlatformTypeSafe || (c.TargetGroupID == nil) == (c.TargetAccountID == nil) {
@@ -269,7 +309,15 @@ func (s *AIRoutingPolicyService) candidateIssue(ctx context.Context, group *Grou
 	}
 	// No real client request or key is sent during a configuration preview.
 	// Use the runtime endpoint constraints and a minimal text-only request.
-	if len(s.gateway.EligibleAIRoutingCandidates(ctx, key, &AIRoutingPolicy{GroupID: group.ID, Candidates: []AIRoutingCandidate{c}}, AIRoutingRequest{PublicModel: c.Model, MaxOutput: 1}, CompositeRouteEndpointMessages, 0)) == 0 {
+	minimal := AIRoutingRequest{Endpoint: endpoint, PublicModel: c.Model, InputBytes: 1, MaxOutput: 1, InputModalities: []string{"text"}}
+	checkPolicy := *policy
+	checkPolicy.GroupID, checkPolicy.Candidates = group.ID, []AIRoutingCandidate{c}
+	if len(s.gateway.EligibleAIRoutingCandidates(ctx, key, &checkPolicy, minimal, endpoint, 0)) == 0 {
+		if policy.ContextMode == "bounded_history" {
+			if issue := s.candidateCapacityIssue(ctx, group.ID, c, minimal); issue != "" {
+				return issue
+			}
+		}
 		return "no eligible account for this model and endpoint"
 	}
 	return ""
@@ -315,19 +363,38 @@ func (s *AIRoutingPolicyService) Publish(ctx context.Context, id, rev int64) (*A
 		return nil, ErrAIRevision
 	}
 	p := st.Draft
+	if e = validateAIRoutingDraft(p); e != nil {
+		return nil, e
+	}
 	if e = s.ValidateDecision(ctx, &p); e != nil {
 		return nil, e
 	}
-	v, e := s.Preview(ctx, id, p)
+	for _, endpoint := range p.ClientEndpoints() {
+		if e = s.validatePublicationForEndpoint(ctx, id, p, endpoint); e != nil {
+			return nil, aiPolicyError(endpoint + ": " + e.Error())
+		}
+	}
+	p.EnabledEndpoints = p.ClientEndpoints()
+	p.SchemaVersion = AIRoutingCurrentSchemaVersion
+	draft := p
+	draft.Enabled = false
+	draft.EnabledEndpoints = append([]string(nil), p.EnabledEndpoints...)
+	p.Enabled = true
+	p.Version = rev + 1
+	return s.writePublication(ctx, id, rev, draft, &p, StatusActive)
+}
+
+func (s *AIRoutingPolicyService) validatePublicationForEndpoint(ctx context.Context, id int64, p AIRoutingPolicy, endpoint string) error {
+	v, e := s.PreviewForEndpoint(ctx, id, p, endpoint)
 	if e != nil {
-		return nil, e
+		return e
 	}
 	if len(v.Eligible) == 0 {
-		return nil, aiPolicyError("No eligible execution candidates")
+		return aiPolicyError("No eligible execution candidates")
 	}
 	for _, ex := range v.Excluded {
 		if ex.Reason != "disabled" {
-			return nil, aiPolicyError(ex.ID + ": " + ex.Reason)
+			return aiPolicyError(ex.ID + ": " + ex.Reason)
 		}
 	}
 	if p.FallbackID != "" {
@@ -338,12 +405,33 @@ func (s *AIRoutingPolicyService) Publish(ctx context.Context, id, rev int64) (*A
 			}
 		}
 		if !found {
-			return nil, aiPolicyError("Fallback is not eligible")
+			return aiPolicyError("Fallback is not eligible")
 		}
 	}
-	p.Enabled = true
-	p.Version = rev + 1
-	return s.writePublication(ctx, id, rev, st.Draft, &p, StatusActive)
+	if p.ContextMode == "bounded_history" && len(v.Eligible) > 1 {
+		choices := make([]AIRoutingCandidate, 0, len(v.Eligible))
+		for _, c := range p.Candidates {
+			if c.Enabled {
+				choices = append(choices, c)
+			}
+		}
+		limits, reserved, err := aiHistoryPlanningLimits(&p, choices)
+		if err != nil {
+			return aiPolicyError("Decision budget cannot fit policy and candidate options")
+		}
+		minimal, err := NewAIRoutingSampleRequestForEndpoint(&p, "Continue", endpoint)
+		if err != nil {
+			return err
+		}
+		history, err := ParseAIRoutingRequestHistory(minimal, limits)
+		if err != nil {
+			return aiPolicyError("History budget cannot fit a minimal request")
+		}
+		if _, err = BuildAIRoutingHistoryTask(ctx, history, limits, reserved, nil, aiHistoryWireSizer(&p, choices)); err != nil {
+			return aiPolicyError("Decision budget cannot fit a minimal request")
+		}
+	}
+	return nil
 }
 func (s *AIRoutingPolicyService) Disable(ctx context.Context, id, rev int64) (*AIRoutingPolicyState, error) {
 	st, e := s.Get(ctx, id)

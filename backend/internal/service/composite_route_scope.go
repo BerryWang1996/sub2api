@@ -147,6 +147,9 @@ func CompositeRouteAccountAllowed(ctx context.Context, account *Account) bool {
 	if scope.ExecutionModel != "" && (!account.IsModelSupported(scope.ExecutionModel) || account.GetMappedModel(scope.ExecutionModel) != scope.ExecutionModel) {
 		return false
 	}
+	if scope.AICandidateID != "" && !CheckAIRoutingExecutionAccount(ctx, account, scope.ExecutionModel).Allowed {
+		return false
+	}
 	if scope.TargetAccountID != 0 {
 		return scope.TargetGroupID == 0 && account.ID == scope.TargetAccountID
 	}

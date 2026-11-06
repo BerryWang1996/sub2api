@@ -346,6 +346,10 @@ export interface PlatformQuotaItem {
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  background_reserved_usd?: number
+  monthly_window_independent?: boolean
+  ordinary_monthly_window_resets_at?: string | null
+  background_monthly_window_resets_at?: string | null
   daily_window_start?: string | null
   weekly_window_start?: string | null
   monthly_window_start?: string | null
