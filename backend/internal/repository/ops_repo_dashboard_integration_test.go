@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +36,7 @@ func TestOpsOutputTPSDistribution(t *testing.T) {
 		_, err := integrationDB.ExecContext(ctx, `INSERT INTO usage_logs
    (user_id, api_key_id, account_id, group_id, request_id, model, input_tokens, output_tokens, duration_ms, request_type, image_count, image_output_tokens, billing_mode, created_at, image_size)
    VALUES ($1,$2,$3,$4,$5,'gpt-test',100000,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $9 > 0 THEN '1K' ELSE NULL END)`,
-			user.ID, key.ID, account.ID, groupID, fmt.Sprintf("output-tps-%d-%d", user.ID, time.Now().UnixNano()), output, duration, requestType, imageCount, imageTokens, billingMode, at)
+			user.ID, key.ID, account.ID, groupID, fmt.Sprintf("output-tps-%d-%s", user.ID, uuid.NewString()), output, duration, requestType, imageCount, imageTokens, billingMode, at)
 		require.NoError(t, err)
 	}
 	// Rates 1, 10, 100, 1000: unequal durations catch ratio-of-sums mistakes.

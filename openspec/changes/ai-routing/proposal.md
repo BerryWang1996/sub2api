@@ -2,6 +2,14 @@
 
 2026-11-06 发布授权更新：用户已确认提交并 push 到 fork，发布 `v0.2.19-barry.3` 镜像；本轮仍不做真实模型测试。Taom 只做只读核实及升级方案准备，部署必须等用户另行确认。下方“未提交/推送/发布”的文字是实施验收时快照，不再代表本轮授权边界。发布结果和实际镜像身份记录在 `artifacts/ai-routing/release-barry3-2026-11-06/`，生产不随本次 Git/镜像发布自动升级。
 
+发布收尾：五入口实现已提交到 `482087931af3df5e1675e08ac390b00b7d735279`。该提交的实时 Security Scan 发现依赖漏洞，发布前补齐最小修复：Brotli `1.2.7`、klauspost/compress `1.20.2`、follow-redirects `1.16.2`、decode-uri-component `0.5.1`；Vue I18n 9/10 已停止维护且无修复，统一升级运行时和 message-compiler 到 `11.4.14`，现有 Composition API 和翻译配置保持不变。所有前端工作流统一为现有镜像采用的 Node 24，Go `1.27.3` 保持不变。没有新增安全扫描例外；XLSX 仅导出的既有两条例外仍适用。依赖变更需重新通过前后端回归与安全检查，不能将前一轮 41 项整链所用二进制冒充依赖更新后的产物；最终镜像与源码身份以发布工作流及本地发布记录为准。
+
+补丁本地验证：前端 383 文件 / 3092 项、lint、类型检查、冻结安装和构建通过；编译后的登录页中英切换无 key 回退或控制台错误（本机合成 API，既有支付 SDK 静态资源仍可能加载，不称全程断网）。后端各包全量 unit 验证通过：首轮 repository 的 3 个用例因进程缺 `sh` 失败，补 Git shell 后完整 repository 重跑通过，其余包沿用该轮成功证据；完整 vet/lint、压缩与 HTTP race、Linux 目标 govulncheck 通过。原提交的 CI 集成测试另发现新增 AI fixture 提交的数据影响后续统计断言，修复仅涉及两份集成测试的精确 ID 清理及限定本 fixture 的更新，不放宽原断言。修后完整 repository integration 默认顺序及 integration-tag vet 通过；额外全包 shuffle 暴露其它既有 soft-delete/usage fixture 残留与 ServerTiming 墙钟波动，该实验未通过，不能宣称任意顺序全绿，AI fixture 的组/任务/窗口/用量残留均为零。日志和针对性复验保存在本轮发布目录；GitHub 同一最终 SHA 的 CI、安全扫描和 Fork image 结果必须另行确认。
+
+本地收尾另复现旧 dashboard 集成测试使用 `time.Now().UnixNano()` 生成 request_id 时的唯一键冲突，仅改为现有 UUID 库生成测试 ID；样本业务时间、查询与断言均不变。AI policy fixture 的无外键 scheduler_outbox 事件也按组 ID 精确清理，不保留孤立事件。
+
+Taom 本轮只读基线为 `/disk_app/sub2api-deploy-mine`，仍运行 `.2`、301 条迁移、AI 组全部停用，应用/数据库/Redis 与内外健康检查正常。升级方案在上述发布目录的 `UPGRADE_PLAN.md`，只准备单条 detached 的备份、预拉取、应用切换、代理恢复、健康检查及失败回滚流程；最终源码 SHA 和镜像 digest 发布后固化。生产升级仍等待用户单独确认，不自动运行该命令。
+
 2026-11-05 · 当前设计基线 `main@b26cc5713`。Messages 首版 `v0.2.19-barry.2` 已完成发布及生产升级，镜像产品源码为 `ddbb1d5fa88eb1888354382fa673590cd83afba8`；`b26cc5713` 仅修复发布工具的 containerd 镜像身份比较，不改变该镜像。本文继续作为同一需求的计划与恢复入口。
 
 2026-11-06 用户已授权按本计划开始本地开发，先完成 M5.0a/0b，再按依赖推进其余入口。允许代码修改和本地模拟验证；本轮不调用真实模型、不提交/push、不发布或部署。用户已确认页面方向：**AI 组点击与 Composite 一致的「路由」入口，进入 AI 专用的「决策模型 → 文字路由规则 → 路由池」三个模块**；长连续上下文契约与效果边界见下文两节专项审计。设计描述不能当成已验收功能；文末保留各批次当时状态，不将历史授权当成本轮操作指令。

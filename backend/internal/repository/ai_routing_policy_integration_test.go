@@ -19,6 +19,14 @@ func TestAIRoutingPolicyPostgresLifecycle(t *testing.T) {
 	policies := NewAIRoutingPolicyRepository(integrationDB)
 	source := &service.Group{Name: fmt.Sprintf("ai-policy-source-%d", time.Now().UnixNano()), Platform: service.PlatformComposite, AIRouting: true, Status: "inactive", RateMultiplier: 1, SubscriptionType: service.SubscriptionTypeStandard}
 	require.NoError(t, groups.Create(ctx, source))
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := integrationDB.ExecContext(cleanup, "DELETE FROM scheduler_outbox WHERE group_id=$1", source.ID)
+		require.NoError(t, err, "cleanup AI policy source scheduling events without a foreign key")
+		_, err = integrationDB.ExecContext(cleanup, "DELETE FROM groups WHERE id=$1", source.ID)
+		require.NoError(t, err, "cleanup AI policy source and cascading policy")
+	})
 	unpub, err := policies.Published(ctx, source.ID)
 	require.NoError(t, err)
 	require.NotNil(t, unpub)
@@ -70,6 +78,14 @@ func TestAIRoutingPolicyPostgresLifecycle(t *testing.T) {
 	duplicate.Name = source.Name + "-copy"
 	duplicate.Status = "inactive"
 	require.NoError(t, groups.CreateFromSource(ctx, &duplicate, source.ID))
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := integrationDB.ExecContext(cleanup, "DELETE FROM scheduler_outbox WHERE group_id=$1", duplicate.ID)
+		require.NoError(t, err, "cleanup copied AI group scheduling events without a foreign key")
+		_, err = integrationDB.ExecContext(cleanup, "DELETE FROM groups WHERE id=$1", duplicate.ID)
+		require.NoError(t, err, "cleanup copied AI group and cascading policy")
+	})
 	copyState, err := policies.Load(ctx, duplicate.ID)
 	require.NoError(t, err)
 	require.Nil(t, copyState.Published)

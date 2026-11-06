@@ -24,10 +24,48 @@ import (
 func backgroundFixture(t *testing.T, subscription bool) (service.AIRoutingBackgroundRepository, *service.AIRoutingBackgroundJob) {
 	t.Helper()
 	client := testEntClient(t)
+	// These tests must commit real transactions for worker/race coverage. The
+	// shared integration database is not reset between suites, so register exact
+	// fixture cleanup before creating anything, including when a later step fails.
+	var userID, groupID, keyID, accountID int64
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tx, err := integrationDB.BeginTx(cleanup, nil)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback() }()
+		for _, step := range []struct {
+			query string
+			id    int64
+		}{
+			{"DELETE FROM fork_ai_response_jobs WHERE user_id=$1", userID},
+			{"DELETE FROM fork_ai_platform_windows WHERE user_id=$1", userID},
+			{"DELETE FROM usage_billing_dedup WHERE api_key_id=$1", keyID},
+			{"DELETE FROM usage_billing_dedup_archive WHERE api_key_id=$1", keyID},
+			{"DELETE FROM billing_usage_entries WHERE user_id=$1", userID},
+			{"DELETE FROM usage_logs WHERE user_id=$1", userID},
+			{"DELETE FROM user_subscriptions WHERE user_id=$1", userID},
+			{"DELETE FROM user_platform_quotas WHERE user_id=$1", userID},
+			{"DELETE FROM api_keys WHERE id=$1", keyID},
+			{"DELETE FROM accounts WHERE id=$1", accountID},
+			{"DELETE FROM groups WHERE id=$1", groupID},
+			{"DELETE FROM users WHERE id=$1", userID},
+		} {
+			if step.id > 0 {
+				_, err = tx.ExecContext(cleanup, step.query, step.id)
+				require.NoError(t, err, "cleanup committed background fixture")
+			}
+		}
+		require.NoError(t, tx.Commit())
+	})
 	u := mustCreateUser(t, client, &service.User{Balance: 10})
+	userID = u.ID
 	g := mustCreateGroup(t, client, &service.Group{Name: "background-" + uuid.NewString(), RateMultiplier: 1})
+	groupID = g.ID
 	k := mustCreateApiKey(t, client, &service.APIKey{UserID: u.ID, GroupID: &g.ID, Key: "sk-" + uuid.NewString(), Name: "background", Quota: 10, RateLimit5h: 10, RateLimit1d: 10, RateLimit7d: 10})
+	keyID = k.ID
 	a := mustCreateAccount(t, client, &service.Account{Name: "background-" + uuid.NewString(), Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey})
+	accountID = a.ID
 	j := &service.AIRoutingBackgroundJob{ID: uuid.NewString(), SourceGroupID: g.ID, UserID: u.ID, APIKeyID: k.ID, AccountID: a.ID, CandidateID: "candidate", PublicModel: "any", ExecutionModel: "fake-model", Platform: service.PlatformOpenAI, TargetAccountID: a.ID, PolicyVersion: 1, RequestPayloadHash: strings.Repeat("a", 64), HoldAmount: 4, PricingSnapshot: json.RawMessage(`{"input_price":0.001,"output_price":0.002}`)}
 	if subscription {
 		_, err := integrationDB.Exec(`UPDATE groups SET subscription_type='subscription',daily_limit_usd=10,weekly_limit_usd=10,monthly_limit_usd=10 WHERE id=$1`, g.ID)
@@ -216,6 +254,12 @@ func TestAIRoutingBackgroundPostgresWindowResetAndStrictIdentity(t *testing.T) {
 	require.Zero(t, s.KeyEffective7dUsage)
 	require.Equal(t, 4.0, s.SubscriptionUSD)
 	other := mustCreateUser(t, testEntClient(t), &service.User{})
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := integrationDB.ExecContext(cleanup, "DELETE FROM users WHERE id=$1", other.ID)
+		require.NoError(t, err, "cleanup unrelated identity fixture")
+	})
 	_, err = r.Reserved(ctx, other.ID, j.SubscriptionID, 0)
 	require.ErrorIs(t, err, service.ErrSubscriptionNotFound)
 	_, err = r.Reserved(ctx, other.ID, 0, j.APIKeyID)
@@ -325,10 +369,10 @@ func TestAIRoutingBackgroundPostgresWorkerRecoveryWithFakeHTTP(t *testing.T) {
 					return nil
 				},
 			}
-			// Isolate due selection to this fixture; other tests leave legitimate
-			// unresolved rows to exercise recovery, not to send any HTTP.
+			// Isolate due selection from other jobs owned by this fixture without
+			// changing another test's data in the shared integration database.
 			due := func() {
-				_, e := integrationDB.Exec(`UPDATE fork_ai_response_jobs SET next_attempt_at=NOW()+INTERVAL '1 hour' WHERE id<>$1`, j.ID)
+				_, e := integrationDB.Exec(`UPDATE fork_ai_response_jobs SET next_attempt_at=NOW()+INTERVAL '1 hour' WHERE user_id=$2 AND id<>$1`, j.ID, j.UserID)
 				require.NoError(t, e)
 				_, e = integrationDB.Exec(`UPDATE fork_ai_response_jobs SET next_attempt_at=NOW()-INTERVAL '1 second',lease_until=NULL WHERE id=$1`, j.ID)
 				require.NoError(t, e)
@@ -621,7 +665,7 @@ func TestAIRoutingBackgroundPostgresActualServiceFactory(t *testing.T) {
 				// recorded price snapshot and the original immutable execution identity.
 				_, err = integrationDB.Exec(`UPDATE groups SET rate_multiplier=999 WHERE id=$1`, j.SourceGroupID)
 				require.NoError(t, err)
-				_, err = integrationDB.Exec(`UPDATE fork_ai_response_jobs SET next_attempt_at=NOW()+INTERVAL '1 hour' WHERE id<>$1`, j.ID)
+				_, err = integrationDB.Exec(`UPDATE fork_ai_response_jobs SET next_attempt_at=NOW()+INTERVAL '1 hour' WHERE user_id=$2 AND id<>$1`, j.ID, j.UserID)
 				require.NoError(t, err)
 				factory = service.NewAIRoutingResponsesBackgroundService(NewAIRoutingResponsesBackgroundRepository(nil, integrationDB), gateway)
 				processed, err := factory.RunOnce(ctx, 1)
@@ -675,7 +719,7 @@ func TestAIRoutingBackgroundPostgresTerminalObservationsFenceWorkers(t *testing.
 			require.Equal(t, service.AIBackgroundUsageUnknown, j.Status)
 			require.NoError(t, writer.RecordBackgroundTerminal(ctx, j.ID, j.AccountID, j.ResponseID, unknown))
 			require.Equal(t, j.Version, backgroundGet(t, r, j).Version)
-			_, err = integrationDB.Exec(`UPDATE fork_ai_response_jobs SET next_attempt_at=NOW()+INTERVAL '1 hour' WHERE id<>$1`, j.ID)
+			_, err = integrationDB.Exec(`UPDATE fork_ai_response_jobs SET next_attempt_at=NOW()+INTERVAL '1 hour' WHERE user_id=$2 AND id<>$1`, j.ID, j.UserID)
 			require.NoError(t, err)
 			claimed, err := r.ClaimDue(ctx, "stale-fetch", time.Minute, 1)
 			require.NoError(t, err)
