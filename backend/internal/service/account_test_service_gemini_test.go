@@ -63,7 +63,7 @@ func TestGeminiDefaultTestModel(t *testing.T) {
 	t.Parallel()
 
 	googleOne := &Account{Platform: PlatformGemini, Type: AccountTypeOAuth, Credentials: map[string]any{"oauth_type": "google_one"}}
-	require.Equal(t, geminicli.GoogleOneModels[0].ID, geminiDefaultTestModel(googleOne))
+	require.Equal(t, "gemini-3.8-flash", geminiDefaultTestModel(googleOne))
 	require.Contains(t, googleOne.GetModelMapping(), geminiDefaultTestModel(googleOne))
 
 	apiKey := &Account{Platform: PlatformGemini, Type: AccountTypeAPIKey}

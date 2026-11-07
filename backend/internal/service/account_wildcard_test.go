@@ -613,7 +613,7 @@ func TestAccountGetModelMapping_AntigravityEnsuresGeminiDefaultPassthroughs(t *t
 	}
 }
 
-func TestAccountGetModelMapping_GoogleOneUsesConservativeDefaults(t *testing.T) {
+func TestAccountGetModelMapping_GoogleOneUsesCurrentDefaults(t *testing.T) {
 	account := &Account{
 		Platform: PlatformGemini,
 		Type:     AccountTypeOAuth,
@@ -622,18 +622,21 @@ func TestAccountGetModelMapping_GoogleOneUsesConservativeDefaults(t *testing.T) 
 		},
 	}
 
+	if !account.IsModelSupported("gemini-3.8-flash") || !account.IsModelSupported("gemini-4-argon") {
+		t.Fatal("current Google One models must be eligible for routing")
+	}
 	mapping := account.GetModelMapping()
-	for _, model := range []string{"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"} {
+	for _, model := range []string{"gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-4-argon"} {
 		if mapping[model] != model {
 			t.Fatalf("expected Google One model %q to map to itself, got %q", model, mapping[model])
 		}
 	}
-	for _, model := range []string{"gemini-2.5-flash-image", "gemini-3.1-flash-image", "gemini-3.5-flash"} {
+	for _, model := range []string{"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.1-flash-image"} {
 		if _, ok := mapping[model]; ok {
 			t.Fatalf("did not expect unsupported Google One model %q", model)
 		}
 	}
-	if account.IsModelSupported("gemini-3.5-flash") {
+	if account.IsModelSupported("gemini-2.5-flash") {
 		t.Fatal("Google One defaults must not treat unsupported models as eligible")
 	}
 }

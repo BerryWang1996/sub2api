@@ -295,7 +295,7 @@ func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(
 	}, ids, "影子可用模型由 model_mapping 派生（非写死）")
 }
 
-func TestAccountHandlerGetAvailableModels_GeminiGoogleOneUsesConservativeCatalog(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_GeminiGoogleOneUsesCurrentTextCatalog(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -326,7 +326,8 @@ func TestAccountHandlerGetAvailableModels_GeminiGoogleOneUsesConservativeCatalog
 	for _, model := range resp.Data {
 		ids = append(ids, model.ID)
 	}
-	require.ElementsMatch(t, []string{"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"}, ids)
+	require.Equal(t, []string{"gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-4-argon"}, ids)
+	require.NotContains(t, ids, "gemini-2.5-flash")
 	require.NotContains(t, ids, "gemini-3.5-flash")
 	require.NotContains(t, ids, "gemini-2.5-flash-image")
 }

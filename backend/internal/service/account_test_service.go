@@ -2382,7 +2382,7 @@ func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, accoun
 	}
 }
 
-// geminiDefaultTestModel 返回 Gemini 连接测试未指定模型时使用的模型；Google One 账号只能使用其保守模型集。
+// geminiDefaultTestModel returns the current default for Gemini connectivity tests.
 func geminiDefaultTestModel(account *Account) string {
 	if account.IsGeminiGoogleOne() {
 		return geminicli.GoogleOneModels[0].ID

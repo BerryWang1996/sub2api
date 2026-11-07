@@ -95,6 +95,26 @@ function buildAccount() {
 }
 
 describe('AccountTestModal', () => {
+  it.each(['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-4-argon'])(
+    'defaults to current Flash and submits selected Gemini model %s', async (model) => {
+    getAvailableModelsMock.mockResolvedValue([
+      'gemini-2.5-flash', 'gemini-3.1-flash-image', 'gemini-4-argon',
+      'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'
+    ].map(id => ({ id, display_name: id })))
+    const wrapper = mount(AccountTestModal, {
+      props: { show: false, account: { ...buildAccount(), platform: 'gemini', type: 'oauth' } },
+      global: { stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true } }
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect((wrapper.vm as any).selectedModelId).toBe('gemini-3.8-flash')
+    ;(wrapper.vm as any).selectedModelId = model
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body).model_id).toBe(model)
+    wrapper.unmount()
+  })
+
   const originalFetch = global.fetch
 
   beforeEach(() => {
