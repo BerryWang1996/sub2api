@@ -1,5 +1,7 @@
 # BerryWang1996 fork：维护与镜像发布
 
+当前升级候选为 **v0.2.20-barry.1**，上游基线为官方标签 v0.2.20（dab829a4e）。保留 fork 的跨厂商、Composite 和 AI 路由定制；以下 v0.2.19-barry.3 发布与部署说明为历史基线。新版本须通过完整检查、不可变镜像核验及生产升级验证后才能标记完成。
+
 维护仓库：<https://github.com/BerryWang1996/sub2api>
 
 上游仓库：<https://github.com/Wei-Shaw/sub2api>
