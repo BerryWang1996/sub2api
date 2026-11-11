@@ -32,8 +32,10 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 	if minOutputTokens <= 0 {
 		minOutputTokens = DefaultMinMaxOutputTokens
 	}
-	if err := openai.ValidateGPT61ReasoningEffort(req.Model, anthropicReasoningEffort(req)); err != nil {
-		return nil, err
+	if !opts.DeferReasoningEffortValidation {
+		if err := openai.ValidateGPT61ReasoningEffort(req.Model, anthropicReasoningEffort(req)); err != nil {
+			return nil, err
+		}
 	}
 	input, err := convertAnthropicToResponsesInputWithPolicy(req.System, req.Messages, opts.ReasoningReplayPolicy)
 	if err != nil {

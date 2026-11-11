@@ -20,10 +20,16 @@ const (
 type AnthropicToResponsesOptions struct {
 	MinOutputTokens       int
 	ReasoningReplayPolicy ReasoningReplayPolicy
+	// DeferReasoningEffortValidation lets gateways validate after policy mapping.
+	DeferReasoningEffortValidation bool
 }
 
 func (p ReasoningReplayPolicy) allowsSignature(sig string) bool {
 	if sig == "" || strings.HasPrefix(sig, "CAQS") || strings.HasPrefix(sig, anthropicThinkingEnvelopePrefix) {
+		return false
+	}
+	// CC Switch envelopes contain a serialized item, not provider ciphertext.
+	if strings.HasPrefix(sig, "ccswitch-openai-reasoning-v1:") {
 		return false
 	}
 	switch p {

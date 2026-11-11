@@ -27,7 +27,9 @@ func anthropicToResponses(cfg *config.Config, req *apicompat.AnthropicRequest, a
 		}
 	}
 	return apicompat.AnthropicToResponsesWithOptions(req, apicompat.AnthropicToResponsesOptions{
-		MinOutputTokens: configuredMinOutputTokens(cfg), ReasoningReplayPolicy: policy,
+		MinOutputTokens:                configuredMinOutputTokens(cfg),
+		ReasoningReplayPolicy:          policy,
+		DeferReasoningEffortValidation: true,
 	})
 }
 
