@@ -295,6 +295,7 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 	}
 	// 非流式响应必须是 application/json（上游被强制流式，透传头会污染）。
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writeForwardedModelHeaders(c, upstreamModel)
 	if respBytes, err := json.Marshal(ccResp); err == nil {
 		respBytes = reverseToolNamesIfPresent(c, respBytes)
 		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
@@ -411,6 +412,9 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			return false
 		}
 		out := string(reverseToolNamesIfPresent(c, []byte(sse)))
+		if len(chunk.Choices) > 0 {
+			writeForwardedModelHeaders(c, upstreamModel)
+		}
 		if _, err := fmt.Fprint(c.Writer, out); err != nil {
 			clientDisconnected = true
 			return false

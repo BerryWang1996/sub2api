@@ -325,7 +325,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var terminal openAIRawStreamTerminalState
 
-	writeLine := func(line string) {
+	writeLine := func(line string, hasChoices bool) {
 		if clientDisconnected {
 			return
 		}
@@ -335,6 +335,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		}
 		if !clientOutputStarted {
 			writeStreamHeaders()
+			if hasChoices {
+				writeForwardedModelHeaders(c, upstreamModel)
+			}
 			for _, pending := range pendingLines {
 				if _, werr := c.Writer.WriteString(pending + "\n"); werr != nil {
 					clientDisconnected = true
@@ -359,11 +362,13 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		hasChoices := false
 		refusalDetector.ObserveSSELine(line)
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
 			terminal.ObserveDataLine(trimmedPayload)
 			if trimmedPayload != "[DONE]" {
+				hasChoices = !clientOutputStarted && gjson.Get(payload, "choices.0").IsObject() && !gjson.Get(payload, "error").Exists()
 				observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 				if u := extractCCStreamUsage(payload); u != nil {
@@ -379,7 +384,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		line = stripEmptyChatToolCallIdentityFromSSELine(line)
 
 		line = s.replaceModelInSSELine(line, upstreamModel, originalModel)
-		writeLine(line)
+		writeLine(line, hasChoices)
 		if line == "" {
 			if !clientDisconnected && clientOutputStarted {
 				c.Writer.Flush()
@@ -560,6 +565,9 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		c.Writer.Header().Set("Content-Type", "application/json")
 	}
 	c.Writer.WriteHeader(http.StatusOK)
+	if gjson.GetBytes(respBody, "choices.0").IsObject() && !gjson.GetBytes(respBody, "error").Exists() {
+		writeForwardedModelHeaders(c, upstreamModel)
+	}
 	_, _ = c.Writer.Write(respBody)
 
 	return &OpenAIForwardResult{

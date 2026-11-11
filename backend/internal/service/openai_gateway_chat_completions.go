@@ -755,6 +755,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	// writeContentType 仅在头不存在时才设置，无法覆盖。这里显式 Set 强制改回 JSON，
 	// 否则下游"看头判流式"的中间层（如 new-api）会把本应聚合的 JSON 当成 SSE 处理。
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writeForwardedModelHeaders(c, upstreamModel)
 	c.JSON(http.StatusOK, chatResp)
 
 	result := &OpenAIForwardResult{
@@ -1029,6 +1030,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				}
 				if !clientOutputStarted {
 					writeStreamHeaders()
+					if len(chunk.Choices) > 0 {
+						writeForwardedModelHeaders(c, upstreamModel)
+					}
 					for _, pending := range pendingSSE {
 						if _, err := fmt.Fprint(c.Writer, pending); err != nil {
 							clientDisconnected = true
@@ -1082,6 +1086,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				}
 				if !clientOutputStarted {
 					writeStreamHeaders()
+					if len(chunk.Choices) > 0 {
+						writeForwardedModelHeaders(c, upstreamModel)
+					}
 					for _, pending := range pendingSSE {
 						if _, err := fmt.Fprint(c.Writer, pending); err != nil {
 							clientDisconnected = true

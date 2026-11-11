@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 )
 
 var codexSelectedPageName = regexp.MustCompile(`^codex_apps_selected_page_part_([1-9][0-9]*)_of_([1-9][0-9]*)$`)
@@ -14,7 +16,7 @@ var codexSelectedPageName = regexp.MustCompile(`^codex_apps_selected_page_part_(
 // Desktop injects page snapshots as standalone outputs, without a model tool call.
 // Keep them as untrusted user text, including on history replay and mixed bootstrap turns.
 func normalizeCodexPageContext(body []byte) ([]byte, bool) {
-	if !mayContainCodexCallOutputCandidate(body, "codex_apps_open_page", "codex_apps_selected_page_part_") || !hasUniqueJSONMembers(body) {
+	if !mayContainCodexCallOutputCandidate(body, "codex_apps_open_page", "codex_apps_selected_page_part_") || !requestmodel.HasUniqueJSONMembers(body) {
 		return body, false
 	}
 	var request map[string]json.RawMessage
@@ -104,7 +106,7 @@ func validCodexPageContext(name, output string) bool {
 }
 
 func validCodexPageSnapshot(text string) bool {
-	if !hasUniqueJSONMembers([]byte(text)) {
+	if !requestmodel.HasUniqueJSONMembers([]byte(text)) {
 		return false
 	}
 	var snapshot map[string]json.RawMessage

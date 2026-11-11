@@ -250,6 +250,7 @@ type UpdateSettingsRequest struct {
 	EnableClaudeOAuthSystemPromptInjection *bool   `json:"enable_claude_oauth_system_prompt_injection"`
 	ClaudeOAuthSystemPrompt                *string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks          *string `json:"claude_oauth_system_prompt_blocks"`
+	ExposeUpstreamModel                    bool    `json:"expose_upstream_model"`
 	EnableAnthropicCacheTTL1hInjection     *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 	RewriteMessageCacheControl             *bool   `json:"rewrite_message_cache_control"`
 	EnableClientDatelineNormalization      *bool   `json:"enable_client_dateline_normalization"`
@@ -1747,6 +1748,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.ClaudeOAuthSystemPromptBlocks
 		}(),
+		ExposeUpstreamModel: req.ExposeUpstreamModel,
 		EnableAnthropicCacheTTL1hInjection: func() bool {
 			if req.EnableAnthropicCacheTTL1hInjection != nil {
 				return *req.EnableAnthropicCacheTTL1hInjection
@@ -2349,6 +2351,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableClaudeOAuthSystemPromptInjection:                 updatedSettings.EnableClaudeOAuthSystemPromptInjection,
 		ClaudeOAuthSystemPrompt:                                updatedSettings.ClaudeOAuthSystemPrompt,
 		ClaudeOAuthSystemPromptBlocks:                          updatedSettings.ClaudeOAuthSystemPromptBlocks,
+		ExposeUpstreamModel:                                    updatedSettings.ExposeUpstreamModel,
 		EnableAnthropicCacheTTL1hInjection:                     updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:                             updatedSettings.RewriteMessageCacheControl,
 		EnableClientDatelineNormalization:                      updatedSettings.EnableClientDatelineNormalization,

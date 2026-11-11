@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // ApplyBedrockCCCompat 应用 Bedrock CC 兼容转换（渠道级模型映射后调用）
@@ -145,7 +146,7 @@ func (s *GatewayService) forwardBedrock(
 	var firstTokenMs *int
 	var clientDisconnect bool
 	if reqStream {
-		streamResult, err := s.handleBedrockStreamingResponse(ctx, resp, c, account, startTime, reqModel)
+		streamResult, err := s.handleBedrockStreamingResponse(ctx, resp, c, account, startTime, reqModel, mappedModel)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +154,7 @@ func (s *GatewayService) forwardBedrock(
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
 	} else {
-		usage, err = s.handleBedrockNonStreamingResponse(ctx, resp, c, account)
+		usage, err = s.handleBedrockNonStreamingResponse(ctx, resp, c, account, mappedModel)
 		if err != nil {
 			return nil, err
 		}
@@ -389,6 +390,7 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
+	mappedModel string,
 ) (*ClaudeUsage, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
 	if err != nil {
@@ -404,6 +406,9 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	c.Header("Content-Type", "application/json")
 	if v := resp.Header.Get("x-amzn-requestid"); v != "" {
 		c.Header("x-request-id", v)
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.ValidBytes(body) && gjson.GetBytes(body, "type").String() == "message" {
+		writeForwardedModelHeaders(c, mappedModel)
 	}
 	c.Data(resp.StatusCode, "application/json", body)
 	return usage, nil

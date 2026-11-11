@@ -61,6 +61,23 @@ func TestFilterHeadersForceRemoveOverridesReasoningIncluded(t *testing.T) {
 	}
 }
 
+func TestFilterHeadersRejectsUpstreamRoutingMetadata(t *testing.T) {
+	src := http.Header{
+		"Connection":               {"keep-alive, x-sub2api-route, x-sub2api-upstream-model"},
+		"x-suB2API-Upstream-Model": {"forged", "also-forged"},
+		ForwardedRouteHeader:       {"ai/private-account"},
+		"X-Request-Id":             {"actual-id"},
+	}
+	filter := CompileHeaderFilter(config.ResponseHeaderConfig{
+		Enabled:           true,
+		AdditionalAllowed: []string{"Connection", ForwardedModelHeader, ForwardedRouteHeader},
+	})
+	filtered := FilterHeaders(src, filter)
+	if len(filtered) != 1 || filtered.Get("X-Request-Id") != "actual-id" {
+		t.Fatalf("forwarded reserved upstream headers or discarded the request ID: %v", filtered)
+	}
+}
+
 func TestFilterHeadersEnabledUsesAllowlist(t *testing.T) {
 	src := http.Header{}
 	src.Add("Content-Type", "application/json")

@@ -23,6 +23,29 @@ The selected concrete platform is used for account selection, user platform
 quota checks, post-usage billing, ops error platform attribution, channel
 mapping/pricing lookup, and platform usage reporting.
 
+## Inspect the forwarded model
+
+In the fork, an administrator can enable **Expose forwarded model** in System
+Settings. The setting defaults to off. A matched Composite or AI route can
+include two headers on a successful output from Messages, Responses HTTP or
+Chat Completions.
+
+- `X-Sub2API-Upstream-Model` shows the model ID the gateway sent in the winning
+  attempt after account mapping.
+- `X-Sub2API-Route` shows the route mode and configured platform, for example
+  `composite/openai` or `ai/anthropic`.
+
+Use `curl -i` or inspect the SDK's raw HTTP response to read the headers. The
+response body retains its client-facing model name. A heartbeat or another
+early write can commit the headers before the winning attempt is known. Some
+provider adapters also omit the headers when they cannot confirm the forwarded
+model before committing. After an error or disconnect, use the stream terminal
+event or the request result to determine the outcome.
+
+Administrators can inspect persisted upstream model and usage data on the
+existing admin usage page. For an AI route, the selected candidate, sent model
+and provider-reported model may each have a different value.
+
 ## Route Registry
 
 Admins can configure routes on a composite group from the group list's

@@ -956,7 +956,7 @@ returnResponse:
 
 // handleClaudeStreamToNonStreaming 收集上游流式响应，转换为 Claude 非流式格式返回
 // 用于处理客户端非流式请求但上游只支持流式的情况
-func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string) (*antigravityStreamResult, error) {
+func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time, originalModel, upstreamModel string) (*antigravityStreamResult, error) {
 	claudeResp, streamRes, err := s.collectClaudeStreamResponse(c, resp, startTime, originalModel)
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
@@ -980,6 +980,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, errType, errMsg)
 	}
+	writeForwardedModelHeaders(c, upstreamModel)
 	c.Data(http.StatusOK, "application/json", claudeResp)
 	return streamRes, nil
 }

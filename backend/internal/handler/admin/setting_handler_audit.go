@@ -470,6 +470,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.ClaudeOAuthSystemPromptBlocks != after.ClaudeOAuthSystemPromptBlocks {
 		changed = append(changed, "claude_oauth_system_prompt_blocks")
 	}
+	if before.ExposeUpstreamModel != after.ExposeUpstreamModel {
+		changed = append(changed, service.SettingKeyExposeUpstreamModel)
+	}
 	if before.EnableAnthropicCacheTTL1hInjection != after.EnableAnthropicCacheTTL1hInjection {
 		changed = append(changed, "enable_anthropic_cache_ttl_1h_injection")
 	}

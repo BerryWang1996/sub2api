@@ -166,6 +166,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
+	writeForwardedModelHeaders(c, upstreamModel)
 	c.JSON(http.StatusOK, responsesResp)
 
 	return &OpenAIForwardResult{
@@ -220,6 +221,9 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 					zap.String("request_id", requestID),
 				)
 				continue
+			}
+			if event.Type != "error" && event.Type != "response.failed" {
+				writeForwardedModelHeaders(c, upstreamModel)
 			}
 			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 				clientDisconnected = true

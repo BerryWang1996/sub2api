@@ -75,6 +75,7 @@ func (h *GatewayHandler) forwardAIResponsesWithOrigin(c *gin.Context, runtime *a
 		slog.WarnContext(forwardCtx, "ai_routing.response_binding_write_failed", "error", err)
 		c.Abort()
 		c.Writer = original
+		service.ClearUncommittedForwardedModelHeaders(original)
 		if !original.Written() {
 			c.Header("Content-Type", "application/json")
 			c.Header("Content-Length", "")

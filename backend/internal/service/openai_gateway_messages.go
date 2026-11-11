@@ -689,6 +689,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
 	c.Header("Content-Type", "application/json; charset=utf-8")
+	writeForwardedModelHeaders(c, upstreamModel)
 	c.JSON(http.StatusOK, anthropicResp)
 
 	result := &OpenAIForwardResult{
@@ -1208,6 +1209,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					continue
 				}
 				writeStreamHeaders()
+				writeForwardedModelHeaders(c, upstreamModel)
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
 					logger.L().Info("openai messages stream: client disconnected, continuing to drain upstream for billing",
@@ -1239,6 +1241,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					continue
 				}
 				writeStreamHeaders()
+				writeForwardedModelHeaders(c, upstreamModel)
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
 					logger.L().Info("openai messages stream: client disconnected during final flush",

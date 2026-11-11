@@ -30,6 +30,7 @@ func (h *GatewayHandler) forwardAIChatWithOrigin(c *gin.Context, runtime *aiRout
 		c.Abort()
 		cancel()
 		c.Writer = base
+		service.ClearUncommittedForwardedModelHeaders(base)
 		payload := gin.H{"error": gin.H{"type": "api_error", "code": "ai_tool_binding_unavailable", "message": "Chat tool continuation could not be recorded."}}
 		// Keep the failover barrier after client cancellation without writing
 		// another event to the dead stream.

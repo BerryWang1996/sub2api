@@ -499,8 +499,9 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatSuccess(
 	call *antigravityCompatUpstreamCall,
 	resp *http.Response,
 ) (*antigravityStreamResult, error) {
+	upstreamModel := antigravityConfirmedForwardedModel(call.geminiBody, call.billingModel)
 	if call.geminiState != nil {
-		result, err := call.geminiState.consume(resp, true)
+		result, err := call.geminiState.consume(resp, true, upstreamModel)
 		if result == nil {
 			return nil, err
 		}
@@ -520,9 +521,19 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatSuccess(
 	}
 
 	if call.request.protocol == antigravityCompatChatCompletions {
-		return s.handleChatCompletionsNonStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel)
+		return s.handleChatCompletionsNonStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel, upstreamModel)
 	}
-	return s.handleResponsesNonStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel)
+	return s.handleResponsesNonStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel, upstreamModel)
+}
+
+func antigravityConfirmedForwardedModel(body []byte, recordedModel string) string {
+	sentModel := gjson.GetBytes(body, "model")
+	// The transformer can choose the WebSearch fallback while the existing
+	// result still uses its billing model. Only expose the model when both agree.
+	if sentModel.Type != gjson.String || sentModel.Str != recordedModel {
+		return ""
+	}
+	return sentModel.Str
 }
 
 func (s *AntigravityGatewayService) handleAntigravityCompatHTTPError(
@@ -645,6 +656,7 @@ func (s *AntigravityGatewayService) handleChatCompletionsNonStreamingFromAntigra
 	resp *http.Response,
 	startTime time.Time,
 	originalModel string,
+	upstreamModel string,
 ) (*antigravityStreamResult, error) {
 	claudeResponse, result, err := s.collectClaudeStreamResponse(c, resp, startTime, originalModel)
 	if err != nil {
@@ -655,6 +667,7 @@ func (s *AntigravityGatewayService) handleChatCompletionsNonStreamingFromAntigra
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
 	responsesResponse := apicompat.AnthropicToResponsesResponse(&anthropicResponse)
+	writeForwardedModelHeaders(c, upstreamModel)
 	c.JSON(http.StatusOK, apicompat.ResponsesToChatCompletions(responsesResponse, originalModel))
 	return result, nil
 }
@@ -664,6 +677,7 @@ func (s *AntigravityGatewayService) handleResponsesNonStreamingFromAntigravity(
 	resp *http.Response,
 	startTime time.Time,
 	originalModel string,
+	upstreamModel string,
 ) (*antigravityStreamResult, error) {
 	claudeResponse, result, err := s.collectClaudeStreamResponse(c, resp, startTime, originalModel)
 	if err != nil {
@@ -673,6 +687,7 @@ func (s *AntigravityGatewayService) handleResponsesNonStreamingFromAntigravity(
 	if json.Unmarshal(claudeResponse, &anthropicResponse) != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
+	writeForwardedModelHeaders(c, upstreamModel)
 	c.JSON(http.StatusOK, apicompat.AnthropicToResponsesResponse(&anthropicResponse))
 	return result, nil
 }

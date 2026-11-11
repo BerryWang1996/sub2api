@@ -7,6 +7,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
+const (
+	ForwardedModelHeader = "X-Sub2API-Upstream-Model"
+	ForwardedRouteHeader = "X-Sub2API-Route"
+)
+
 // defaultAllowed 定义允许透传的响应头白名单
 // 注意：以下头部由 Go HTTP 包自动处理，不应手动设置：
 //   - content-length: 由 ResponseWriter 根据实际写入数据自动设置
@@ -93,6 +98,10 @@ func FilterHeaders(src http.Header, filter *CompiledHeaderFilter) http.Header {
 	filtered := make(http.Header, len(src))
 	for key, values := range src {
 		lower := strings.ToLower(key)
+		// These names are gateway-owned, even when configured as additional allowed headers.
+		if strings.EqualFold(key, ForwardedModelHeader) || strings.EqualFold(key, ForwardedRouteHeader) {
+			continue
+		}
 		if _, blocked := filter.forceRemove[lower]; blocked {
 			continue
 		}

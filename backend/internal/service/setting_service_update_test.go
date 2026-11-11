@@ -228,6 +228,26 @@ func (s *defaultSubGroupReaderStub) GetByID(ctx context.Context, id int64) (*Gro
 	return nil, ErrGroupNotFound
 }
 
+func TestSettingService_UpstreamModelExposureDefaultsOffAndRefreshesOnWrite(t *testing.T) {
+	ctx := context.Background()
+	repo := &forwardedIPMigrationRepoStub{values: map[string]string{}}
+	svc := NewSettingService(repo, &config.Config{})
+
+	require.False(t, svc.IsUpstreamModelExposureEnabled(ctx))
+	require.NoError(t, svc.UpdateSettings(ctx, &SystemSettings{ExposeUpstreamModel: true}))
+	require.Equal(t, "true", repo.updates[SettingKeyExposeUpstreamModel])
+	require.True(t, svc.IsUpstreamModelExposureEnabled(ctx))
+
+	require.NoError(t, svc.UpdateSettings(ctx, &SystemSettings{}))
+	require.Equal(t, "false", repo.updates[SettingKeyExposeUpstreamModel])
+	require.False(t, svc.IsUpstreamModelExposureEnabled(ctx))
+
+	repo.values[SettingKeyExposeUpstreamModel] = "true"
+	repo.getMultipleErr = errors.New("setting unavailable")
+	svc.invalidateUpstreamModelExposure()
+	require.False(t, svc.IsUpstreamModelExposureEnabled(ctx))
+}
+
 func TestSettingService_UpdateSettings_PersistsCompactHomeEnabled(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})

@@ -73,8 +73,8 @@ func (s *AntigravityGatewayService) prepareAIAntigravityGeminiState(ctx context.
 			}
 			return sjson.SetRawBytes(wire, "request", restored)
 		},
-		consume: func(resp *http.Response, upstreamStream bool) (*geminiStreamResult, error) {
-			return consumeGeminiResponses(ctx, c, resp, request.startTime, request.originalModel, request.clientStream, upstreamStream, mapping, callbacks, settingServiceConfig(s.settingService), nil, chat)
+		consume: func(resp *http.Response, upstreamStream bool, upstreamModel string) (*geminiStreamResult, error) {
+			return consumeGeminiResponses(ctx, c, resp, request.startTime, request.originalModel, upstreamModel, request.clientStream, upstreamStream, mapping, callbacks, settingServiceConfig(s.settingService), nil, chat)
 		},
 	}
 	return request, options, nil

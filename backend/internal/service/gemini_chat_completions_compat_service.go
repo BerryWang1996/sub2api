@@ -80,8 +80,8 @@ func (s *GeminiMessagesCompatService) ForwardAsChatCompletions(
 	if replay != nil {
 		options := &geminiResponsesForwardOptions{
 			prepare: func(wire []byte) ([]byte, error) { return replay.apply(wire, responsesReq.ToolChoice) },
-			consume: func(resp *http.Response, upstreamStream bool) (*geminiStreamResult, error) {
-				return consumeGeminiResponses(ctx, c, resp, startTime, originalModel, clientStream, upstreamStream, apicompat.ResponsesClientToolMapping{}, callbacks, s.cfg, s.responseHeaderFilter, &geminiResponsesChatOutput{includeUsage: includeUsage})
+			consume: func(resp *http.Response, upstreamStream bool, upstreamModel string) (*geminiStreamResult, error) {
+				return consumeGeminiResponses(ctx, c, resp, startTime, originalModel, upstreamModel, clientStream, upstreamStream, apicompat.ResponsesClientToolMapping{}, callbacks, s.cfg, s.responseHeaderFilter, &geminiResponsesChatOutput{includeUsage: includeUsage})
 			},
 		}
 		return s.forwardClaudeBodyAsChatCompletions(ctx, c, account, claudeBody, originalModel, clientStream, includeUsage, startTime, options)
@@ -285,7 +285,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 	streamFinished := false
 	var consumeErr error
 	if responses != nil {
-		streamRes, err := responses.consume(resp, useUpstreamStream)
+		streamRes, err := responses.consume(resp, useUpstreamStream, mappedModel)
 		if streamRes == nil {
 			return nil, err
 		}
@@ -311,10 +311,11 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		if err != nil {
 			return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 		}
+		writeForwardedModelHeaders(c, mappedModel)
 		c.JSON(http.StatusOK, chatResp)
 		usage = usageObj2
 	} else {
-		usageResp, err := s.handleChatCompletionsNonStreamingResponseFromGemini(c, resp, originalModel, account.Type == AccountTypeOAuth)
+		usageResp, err := s.handleChatCompletionsNonStreamingResponseFromGemini(c, resp, originalModel, mappedModel, account.Type == AccountTypeOAuth)
 		if err != nil {
 			return nil, err
 		}
@@ -494,7 +495,7 @@ func (s *GeminiMessagesCompatService) buildGeminiChatCompletionsUpstreamRequestF
 func (s *GeminiMessagesCompatService) handleChatCompletionsNonStreamingResponseFromGemini(
 	c *gin.Context,
 	resp *http.Response,
-	originalModel string,
+	originalModel, mappedModel string,
 	isOAuth bool,
 ) (*ClaudeUsage, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
@@ -518,6 +519,7 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsNonStreamingResponseF
 	}
 
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	writeForwardedModelHeaders(c, mappedModel)
 	c.JSON(http.StatusOK, chatResp)
 	return usage, nil
 }

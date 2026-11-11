@@ -1,35 +1,48 @@
+## Status
+
+2026-11-11，目标版本 `v0.2.21-barry.4`，已获实施及 fork 发布授权，Taom 切换待确认。官方基线固定为 `v0.2.21@10ba8f9b4`，fork 源码核查基线为 `54f38c4de`（含已发布 `v0.2.20-barry.3@dda005953` 和计划登记）。已完成方案复审和基线整合，实施与验证见任务清单。 [官方发布说明](https://github.com/Wei-Shaw/sub2api/releases/tag/v0.2.21)
+
+产品和兼容性决策见 [design.md](design.md)，唯一实施任务清单见 [tasks.md](tasks.md)。确认方案不等于授权真实模型评测、发布或部署。
+
 ## Why
 
-Composite 与 AI 路由把客户端请求的公开模型名改写成上游模型后，响应体的 `model` 字段会回写成客户端原名（`openai_gateway_responses_anthropic_native.go` 的 `responsesResp.Model = originalModel`），以保持客户端身份与缓存键稳定。副作用是客户端本机没有任何渠道知道这次请求实际落到了哪家、哪个模型：Claude Code / Claude Desktop 的会话日志、`/tasks`、本地代理的用量统计记的都是公开别名；真实落点只在服务端 `usage_log` 的 `upstream_model`、`upstream_response_model`、`upstream_model_mismatch`、`model_mapping_chain` 列，普通用户和本机审计脚本看不到。
+Composite / AI 保持响应体公开别名，有助于客户端兼容，但用户难以核对网关发给上游的模型。应解决的是“可核对转发结果”，而非证明供应商内部实际执行身份，也不承诺让所有客户端自动修改会话日志。
 
-2026-11-08 用户决定把「把上游模型带回本机」登记进 fork 开发计划，作为别名重构（四档 × 厂商映射表）的配套；实现、发布与生产升级各需另行授权，本文只是计划。
+原登记稿有三个需要修正的前提：普通用户 DTO 有意隐藏上游信息，并非仅补前端；SSE 保活可能先提交 HTTP 头，不能保证所有流都带最终模型或所有失败响应都无头；AI 候选仍可能经过账号映射，execution_model 不总是最终发送模型。
 
-## What Changes
+## What Changes（推荐，未确认）
 
-- 在 Messages、Responses HTTP、Chat Completions 三类客户端出口统一加两条响应头：`X-Sub2API-Upstream-Model: <upstream_model>`、`X-Sub2API-Route: <group>/<platform>`。流式响应在首个 SSE 事件前写头；非流式随正文返回。Responses WebSocket 与 Gemini 原生入口本期不改，另立条目。
-- 不改响应体 `model` 字段，不改用量、计费与缓存键；响应头只读，不参与任何决策。
-- 头的取值与 `usage_log` 同源：`upstream_model` 取实际发往上游的模型，`route` 取最终解析的组与平台；AI 路由走 `execution_model` 与候选目标。请求失败、未命中路由或在决策前被拒时不写头。
-- 普通用户用量页展示「公开模型 → 实际模型」两列（现有字段，仅补前端），管理员页不变。
-- 可选第二步（不在本条目内承诺）：识别 Claude Code 官方请求头 `x-claude-code-request-class`，把 auxiliary / compaction 桶强制走指定便宜档；需先核实该头在 Claude Desktop 托管会话里是否存在。
+- `.4` 聚焦可观察性：Messages、Responses HTTP、Chat Completions 三类生成出口的已匹配 Composite / AI 路由，提供条件允许时的转发信息响应头；用户可在受控用量页查看已记录结果。
+- `X-Sub2API-Upstream-Model` 严格表示“最终发往上游的模型 ID”，不取公开别名、决策模型或供应商自报名称冒充。
+- 建议将 `X-Sub2API-Route` 从原稿 `<group>/<platform>` 改成 `composite/<platform>` 或 `ai/<platform>`，不公开内部目标身份；待确认。
+- 默认关闭的管理员开关控制响应头。复用现有 settings 存储，本次仅应用官方两项迁移。
+- 复审采用 D2 的预设退路。现有账本缺少可覆盖两类路由的匹配来源，本版发布响应头并沿用管理员用量诊断。普通用户投影及网页列留待解决来源证明。
+- 提前保活、重试等导致无法在提交前确认模型时，允许省略头；不改变正文、SSE 保活或故障转移来强行补头。
 
 ## Capabilities
 
 ### New Capabilities
-- `upstream-model-headers`：三类客户端出口的上游模型与路由响应头，流式与非流式一致；失败路径不写头；用量页两列展示。
+
+- `upstream-model-headers`：受控、无内部目标身份泄露、兼容流式提交时机的转发信息。
+- 管理员沿用现有用量页核对发送模型与自报模型。
 
 ### Modified Capabilities
-<!-- openspec/specs 目前为空，没有既有能力需要修改。 -->
+
+- 不改变生成语义、别名、计费、缓存、候选筛选、原点绑定或决策权限。
+- 普通用户的信息边界有显式增量，需要确认，不能视为纯展示改动。
 
 ## Non-goals
 
-- 不改变 `model` 字段、不暴露账号 ID、不暴露决策提示词或候选池。
-- 不替代服务端 usage_log 作为计费与审计的权威来源。
-- 不为 CC Switch 等本地代理做专门适配；它们按普通 HTTP 头透传即可。
+- 本期不扩展 Responses WS、Gemini 原生、普通未命中路由、辅助/后台/媒体端点的响应头。
+- 不新增 Jev 并行复核、调 effort/工具/预算权限或未经校准的置信度阈值。
+- 不重构四档别名，不按 auxiliary/compaction 自动降级，不把个人主链路切到 AI。
+- 不承诺 Claude Code、Desktop、CC Switch、/tasks 或本地费用统计自动识别自定义头。
+- 不改既有 CSV 格式、管理员页面、数据库记录格式，不回填数据或新增计费/会话库。
 
 ## Impact
 
-- 后端：三个出口的响应写入路径与 SSE 首块；`usage_log` 不变，无迁移。
-- 前端：用量页增加两列。
-- 版本：预计随 v0.2.20-barry.4 发布；按 `FORK_MAINTENANCE.md` 走完整预检、不可变镜像核验与生产升级验证。
-- 验证：curl 对三类出口各发一次流式与非流式请求，核对头值与 usage_log 一致；Claude Desktop 经 CC Switch 直连时抓包确认头可见；失败请求无头。
-- 回滚：回退镜像到 v0.2.20-barry.3，无数据层改动。
+- 后端：尝试级采集与清理、首次合法提交点、CORS、settings、受控用户 DTO；不能仅在 Forward 返回后设头。
+- 前端：系统设置、普通用户用量表及类型/i18n，沿用当前组件和页面。
+- 三出口 × Composite/AI × 流/非流形成 12 条基础链路。额外覆盖 Codex 元数据后过载、不同出口的保活及重试边界、最终发送与用量对账、30m/12h 计费和旧版兼容。预检发现六处文本冲突，详细入口及验收见设计和任务清单。
+- AI 产品路线建议为“Composite 保留主链路 → 检查配置 → 独立 Key 试点 → 评估后决定扩展”。Jev 设计与评测建议在 design，不扩张本期算法。
+- 元数据异常优先关闭可见性。生成或计费回归时，仅在 `.3` 已通过对应迁移状态回放的前提下恢复旧镜像与配置并保留数据库；确需恢复数据库时，按备份恢复与新增写入对账方案另行处理。Taom 的迁移、健康及业务验证见设计第九节。

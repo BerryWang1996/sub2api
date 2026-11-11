@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 )
 
@@ -64,6 +65,10 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 		allowHeaders = append(allowHeaders, "x-stainless-"+prop)
 	}
 	allowHeadersValue := strings.Join(allowHeaders, ", ")
+	exposeHeadersValue := strings.Join([]string{
+		"ETag", "Server-Timing", "WWW-Authenticate", "X-Request-ID",
+		responseheaders.ForwardedModelHeader, responseheaders.ForwardedRouteHeader,
+	}, ", ")
 
 	return func(c *gin.Context) {
 		// OAuth discovery and public-client protocol endpoints use no browser
@@ -106,7 +111,7 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 			}
 			c.Writer.Header().Set("Access-Control-Allow-Headers", allowHeadersValue)
 			c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
-			c.Writer.Header().Set("Access-Control-Expose-Headers", "ETag, Server-Timing, WWW-Authenticate")
+			c.Writer.Header().Set("Access-Control-Expose-Headers", exposeHeadersValue)
 			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 		}
 		// 处理预检请求

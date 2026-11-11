@@ -980,6 +980,45 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
 }
 
+type cachedUpstreamModelExposure struct {
+	enabled   bool
+	expiresAt int64
+}
+
+func (s *SettingService) invalidateUpstreamModelExposure() {
+	// Change the snapshot even if a cold read is still in flight.
+	s.upstreamModelExposureCache.Store(&cachedUpstreamModelExposure{})
+	s.upstreamModelExposureSF.Forget(SettingKeyExposeUpstreamModel)
+}
+
+// IsUpstreamModelExposureEnabled reports whether generation routes may disclose the forwarded model.
+func (s *SettingService) IsUpstreamModelExposureEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil || ctx == nil {
+		return false
+	}
+	cached := s.upstreamModelExposureCache.Load()
+	if cached == nil || time.Now().UnixNano() >= cached.expiresAt {
+		_, _, _ = s.upstreamModelExposureSF.Do(SettingKeyExposeUpstreamModel, func() (any, error) {
+			previous := s.upstreamModelExposureCache.Load()
+			if previous != nil && time.Now().UnixNano() < previous.expiresAt {
+				return nil, nil
+			}
+			dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
+			defer cancel()
+			values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyExposeUpstreamModel})
+			snapshot := &cachedUpstreamModelExposure{expiresAt: time.Now().Add(gatewayForwardingErrorTTL).UnixNano()}
+			if err == nil {
+				snapshot.enabled = values[SettingKeyExposeUpstreamModel] == "true"
+				snapshot.expiresAt = time.Now().Add(gatewayForwardingCacheTTL).UnixNano()
+			}
+			s.upstreamModelExposureCache.CompareAndSwap(previous, snapshot)
+			return nil, nil
+		})
+		cached = s.upstreamModelExposureCache.Load()
+	}
+	return cached != nil && time.Now().UnixNano() < cached.expiresAt && cached.enabled
+}
+
 // GetOpenAITTFTMode 返回 Responses first_token_ms 的统计口径。
 func (s *SettingService) GetOpenAITTFTMode(ctx context.Context) string {
 	return s.getGatewayForwardingSettingsCached(ctx).openAITTFTMode

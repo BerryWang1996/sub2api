@@ -291,6 +291,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if !clientDisconnected {
 			if completedProgressEvent {
 				applyAttemptResponseHeaders()
+				if !sawFailedEvent && !sawBareError {
+					writeForwardedModelHeaders(c, mappedModel)
+				}
 			}
 			if shouldFlush {
 				if err := flushBuffered(); err != nil {
@@ -729,6 +732,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				if firstTokenMs == nil && startsVisibleOutput {
 					// 保证首个 token 事件尽快出站，避免影响 TTFT。
 					shouldFlush = true
+				}
+				if !stageFirstOutput && startsClientOutput && !sawFailedEvent && !sawBareError {
+					writeForwardedModelHeaders(c, mappedModel)
 				}
 				eventShouldFlush = eventShouldFlush || shouldFlush
 				if _, err := writePendingString(line); err != nil {
@@ -1748,6 +1754,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.GetBytes(body, "error").Type == gjson.Null && gjson.GetBytes(body, "status").String() != "failed" {
+		writeForwardedModelHeaders(c, mappedModel)
+	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -1859,6 +1868,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
+	}
+	if ok && resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.GetBytes(body, "error").Type == gjson.Null && gjson.GetBytes(body, "status").String() != "failed" {
+		writeForwardedModelHeaders(c, mappedModel)
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		// 上游的 Content-Type（text/event-stream）已复制到响应头，而 c.Data

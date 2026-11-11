@@ -267,7 +267,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
 	} else {
-		usage, err = s.handleNonStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account)
+		usage, err = s.handleNonStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account, input.RequestModel)
 		if err != nil {
 			return nil, err
 		}
@@ -561,6 +561,11 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			}
 
 			if !clientDisconnected {
+				if strings.TrimSpace(line) == "event: message_start" {
+					writeForwardedModelHeaders(c, model)
+				} else if data, ok := extractAnthropicSSEDataLine(line); ok && gjson.Get(data, "type").String() == "message_start" {
+					writeForwardedModelHeaders(c, model)
+				}
 				restored := string(reverseToolNamesIfPresent(c, []byte(line)))
 				if _, err := io.WriteString(w, restored); err != nil {
 					clientDisconnected = true
@@ -859,6 +864,7 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
+	model string,
 ) (*ClaudeUsage, error) {
 	if s.rateLimitService != nil {
 		s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
@@ -895,6 +901,9 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		contentType = "application/json"
 	}
 	body = reverseToolNamesIfPresent(c, body)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.GetBytes(body, "type").String() == "message" {
+		writeForwardedModelHeaders(c, model)
+	}
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, nil
 }

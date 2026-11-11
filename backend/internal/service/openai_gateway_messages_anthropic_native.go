@@ -273,6 +273,9 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 		contentType = "application/json"
 	}
 	body = reverseToolNamesIfPresent(c, body)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.GetBytes(body, "type").String() == "message" {
+		writeForwardedModelHeaders(c, upstreamModel)
+	}
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &OpenAIForwardResult{
@@ -464,8 +467,12 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			}
 
 			line := ev.line
+			var eventType string
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
+				if !w.Written() {
+					eventType = gjson.Get(trimmed, "type").String()
+				}
 				observer.ObserveAnthropic([]byte(trimmed))
 				if anthropicStreamEventIsTerminal("", trimmed) {
 					sawTerminalEvent = true
@@ -475,14 +482,18 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 					firstTokenMs = &ms
 				}
 				parseSSEUsagePassthrough(data, usage)
-			} else {
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "event:") && anthropicStreamEventIsTerminal(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")), "") {
+			} else if name, ok := parseAnthropicSSEField(strings.TrimSpace(line), "event"); ok {
+				eventType = name
+				if anthropicStreamEventIsTerminal(eventType, "") {
 					sawTerminalEvent = true
 				}
 			}
 
 			if !clientDisconnected {
+				switch eventType {
+				case "message_start", "content_block_start", "content_block_delta", "message_delta", "message_stop":
+					writeForwardedModelHeaders(c, upstreamModel)
+				}
 				restored := string(reverseToolNamesIfPresent(c, []byte(line)))
 				if _, err := io.WriteString(w, restored); err != nil {
 					clientDisconnected = true

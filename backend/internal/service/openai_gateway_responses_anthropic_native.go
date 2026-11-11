@@ -307,8 +307,10 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		if err != nil {
 			return nil, fmt.Errorf("restore responses client tools: %w", err)
 		}
+		writeForwardedModelHeaders(c, upstreamModel)
 		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
 	} else {
+		writeForwardedModelHeaders(c, upstreamModel)
 		c.JSON(http.StatusOK, responsesResp)
 	}
 
@@ -449,6 +451,9 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 			}
 			for _, restored := range payloads {
 				eventType := gjson.GetBytes(restored, "type").String()
+				if eventType != "error" && eventType != "response.failed" {
+					writeForwardedModelHeaders(c, upstreamModel)
+				}
 				if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, restored); err != nil {
 					clientDisconnected = true
 					return
@@ -530,6 +535,9 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 			}
 			for _, restored := range payloads {
 				eventType := gjson.GetBytes(restored, "type").String()
+				if eventType != "error" && eventType != "response.failed" {
+					writeForwardedModelHeaders(c, upstreamModel)
+				}
 				if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, restored); err != nil {
 					clientDisconnected = true
 					break

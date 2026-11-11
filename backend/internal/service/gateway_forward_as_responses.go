@@ -526,8 +526,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		if err != nil {
 			return nil, fmt.Errorf("restore responses client tools: %w", err)
 		}
+		writeForwardedModelHeaders(c, mappedModel)
 		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
 	} else {
+		writeForwardedModelHeaders(c, mappedModel)
 		c.JSON(http.StatusOK, responsesResp)
 	}
 
@@ -640,6 +642,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			}
 			for _, restored := range payloads {
 				eventType := gjson.GetBytes(restored, "type").String()
+				if eventType != "error" && eventType != "response.failed" {
+					writeForwardedModelHeaders(c, mappedModel)
+				}
 				if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, restored); err != nil {
 					stream.markClientDisconnected()
 					return

@@ -235,6 +235,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				if retryResp.StatusCode < 400 {
 					_ = resp.Body.Close()
 					resp = retryResp
+					geminiBody = retryGeminiBody
 					respBody = nil
 					break
 				}
@@ -352,6 +353,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 							if retryResp.StatusCode < 400 {
 								_ = resp.Body.Close()
 								resp = retryResp
+								geminiBody = retryGeminiBody
 								respBody = nil
 							} else {
 								retryBody := s.readUpstreamErrorBody(retryResp)
@@ -469,7 +471,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		clientDisconnect = streamRes.clientDisconnect
 	} else {
 		// 客户端要求非流式，收集流式响应后转换返回
-		streamRes, err := s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel)
+		upstreamModel := antigravityConfirmedForwardedModel(geminiBody, billingModel)
+		streamRes, err := s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel, upstreamModel)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_collect_error error=%v", prefix, err)
 			return nil, err

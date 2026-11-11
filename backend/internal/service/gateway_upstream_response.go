@@ -1101,6 +1101,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 				for _, block := range outputBlocks {
 					if !clientDisconnected {
+						if data != "" && data != "[DONE]" && gjson.Get(data, "type").String() != "error" {
+							writeForwardedModelHeaders(c, mappedModel)
+						}
 						restored := reverseToolNamesIfPresent(c, []byte(block))
 						if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
 							clientDisconnected = true
@@ -1479,6 +1482,9 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	body = reverseToolNamesIfPresent(c, body)
 
 	// 写入响应
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.GetBytes(body, "error").Type == gjson.Null {
+		writeForwardedModelHeaders(c, mappedModel)
+	}
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &response.Usage, nil

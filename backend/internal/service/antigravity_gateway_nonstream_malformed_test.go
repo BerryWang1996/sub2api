@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -29,20 +30,26 @@ func TestAntigravityMalformedFunctionCallNonStreaming(t *testing.T) {
 			t.Run(protocol+"/"+tc.name, func(t *testing.T) {
 				svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, nil)
 				c, recorder := newAntigravityCompatContext(http.MethodPost, "/v1/responses", nil)
+				c.Request = c.Request.WithContext(WithCompositeRouteDecision(c.Request.Context(), CompositeRouteDecision{
+					Matched: true, TargetPlatform: PlatformAntigravity,
+				}))
+				c.Set(forwardedModelExposureKey, true)
 				resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.frames))}
 				handle := svc.handleResponsesNonStreamingFromAntigravity
 				if protocol == "chat" {
 					handle = svc.handleChatCompletionsNonStreamingFromAntigravity
 				}
-				_, err := handle(c, resp, time.Now(), "test-model")
+				_, err := handle(c, resp, time.Now(), "test-model", "sent-model")
 				require.Equal(t, tc.status, recorder.Code)
 				if tc.status == http.StatusBadGateway {
 					require.Error(t, err)
+					require.Empty(t, recorder.Result().Header.Get(responseheaders.ForwardedModelHeader))
 					require.Contains(t, recorder.Body.String(), `"type":"malformed_function_call"`)
 					require.Contains(t, recorder.Body.String(), "MALFORMED_FUNCTION_CALL")
 					require.NotContains(t, recorder.Body.String(), `"status":"completed"`)
 				} else {
 					require.NoError(t, err)
+					require.Equal(t, "sent-model", recorder.Result().Header.Get(responseheaders.ForwardedModelHeader))
 					if protocol == "responses" {
 						require.Contains(t, recorder.Body.String(), `"status":"completed"`)
 					} else {

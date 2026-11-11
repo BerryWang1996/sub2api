@@ -29,6 +29,7 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	account *Account,
 	startTime time.Time,
 	model string,
+	mappedModel string,
 ) (*streamingResult, error) {
 	w := c.Writer
 	flusher, ok := w.(http.Flusher)
@@ -154,6 +155,9 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 写入标准 SSE 格式
 			if !clientDisconnected {
+				if eventType == "message_start" || eventType == "content_block_start" || eventType == "content_block_delta" {
+					writeForwardedModelHeaders(c, mappedModel)
+				}
 				var writeErr error
 				if eventType != "" {
 					_, writeErr = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, sseData)

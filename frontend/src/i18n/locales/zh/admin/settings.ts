@@ -570,6 +570,8 @@ export default {
         cacheTTL1h: '1 小时',
         anthropicCacheTTL1hInjection: 'Anthropic 缓存 TTL 注入',
         anthropicCacheTTL1hInjectionHint: '开启后，对 Anthropic OAuth/Setup Token 请求体中已有的 ephemeral 缓存块强制写入 1h；响应 usage 默认按 5m 回写计费，账号级 TTL 计费设置优先。',
+        exposeUpstreamModel: '在响应头显示转发模型',
+        exposeUpstreamModelHint: '命中 Composite 或 AI 路由时，调用者可以查看发往上游的模型，以及路由模式和平台。流式保活先发出时可能省略这些头。',
         rewriteMessageCacheControl: '改写消息缓存断点',
         rewriteMessageCacheControlHint: '默认关闭，保留客户端在 messages 内容块中的 cache_control。开启后会清除客户端断点并注入代理断点，适合不自行管理缓存策略的客户端。',
         clientDatelineNormalization: '客户端 dateline 归一化',

@@ -16,6 +16,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -122,6 +123,48 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream_options.include_usage").Bool())
 	require.Contains(t, rec.Body.String(), `"usage"`)
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
+}
+
+func TestRawChatForwardedModelHeadersRespectFirstWrite(t *testing.T) {
+	const chunk = "data: {\"model\":\"sent-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n"
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		want   string
+	}{
+		{name: "choice first", want: "sent-model"},
+		{name: "keepalive first", prefix: ": ping\n\n"},
+		{name: "usage first", prefix: "data: {\"choices\":[],\"usage\":{\"completion_tokens\":1}}\n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			c.Request = req.WithContext(WithCompositeRouteDecision(req.Context(), CompositeRouteDecision{
+				Matched: true, TargetPlatform: PlatformOpenAI,
+			}))
+			c.Set(forwardedModelExposureKey, true)
+			upstream := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(tc.prefix + chunk + "data: [DONE]\n\n")),
+			}
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}
+			result, err := svc.streamRawChatCompletions(c, upstream, rawChatCompletionsTestAccount(),
+				"public-alias", "billing-model", "sent-model", nil, nil, time.Now(), 1)
+
+			require.NoError(t, err)
+			require.Equal(t, "sent-model", result.UpstreamModel)
+			require.Equal(t, tc.want, rec.Result().Header.Get(responseheaders.ForwardedModelHeader))
+			if tc.want == "" {
+				require.Empty(t, rec.Result().Header.Get(responseheaders.ForwardedRouteHeader))
+			} else {
+				require.Equal(t, "composite/openai", rec.Result().Header.Get(responseheaders.ForwardedRouteHeader))
+			}
+			require.Contains(t, rec.Body.String(), `"model":"public-alias"`)
+			require.Contains(t, rec.Body.String(), "data: [DONE]")
+		})
+	}
 }
 
 func TestForwardAsChatCompletions_OpenAICompatibleGrokRawMissingUsageFailsBeforeWrite(t *testing.T) {

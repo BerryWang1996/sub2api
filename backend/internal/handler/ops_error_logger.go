@@ -469,6 +469,7 @@ func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) 
 		return
 	}
 	service.ClearOpsUpstreamModel(c)
+	service.ClearUncommittedForwardedModelHeaders(c.Writer)
 	c.Set(opsAccountIDKey, accountID)
 	if c.Request != nil {
 		ctx := context.WithValue(c.Request.Context(), ctxkey.AccountID, accountID)

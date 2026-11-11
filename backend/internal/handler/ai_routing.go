@@ -218,6 +218,7 @@ func (h *GatewayHandler) AIRoute(c *gin.Context) {
 			slog.WarnContext(ctx, "ai_routing.binding_write_failed", "request_id", requestID, "error", err)
 			c.Abort()
 			c.Writer = original
+			service.ClearUncommittedForwardedModelHeaders(original)
 			if !original.Written() {
 				c.Header("Content-Type", "application/json")
 				c.Header("Content-Length", "")

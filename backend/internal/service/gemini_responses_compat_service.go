@@ -50,7 +50,7 @@ func WithGeminiResponsesToolState(ctx context.Context, callbacks GeminiResponses
 
 type geminiResponsesForwardOptions struct {
 	prepare func([]byte) ([]byte, error)
-	consume func(*http.Response, bool) (*geminiStreamResult, error)
+	consume func(resp *http.Response, upstreamStream bool, upstreamModel string) (*geminiStreamResult, error)
 }
 
 // ForwardAsResponses reuses Gemini's ordinary transport and account handling.
@@ -103,8 +103,8 @@ func (s *GeminiMessagesCompatService) ForwardAsResponses(ctx context.Context, c 
 		prepare: func(wire []byte) ([]byte, error) {
 			return replay.apply(wire, responses.ToolChoice)
 		},
-		consume: func(resp *http.Response, upstreamStream bool) (*geminiStreamResult, error) {
-			return s.consumeGeminiResponses(ctx, c, resp, start, responses.Model, responses.Stream, upstreamStream, mapping, callbacks)
+		consume: func(resp *http.Response, upstreamStream bool, upstreamModel string) (*geminiStreamResult, error) {
+			return consumeGeminiResponses(ctx, c, resp, start, responses.Model, upstreamModel, responses.Stream, upstreamStream, mapping, callbacks, s.cfg, s.responseHeaderFilter, nil)
 		},
 	}
 	result, err := s.forwardClaudeBodyAsChatCompletions(ctx, c, account, claudeBody, responses.Model, responses.Stream, false, start, options)
@@ -188,13 +188,9 @@ func geminiResponsesStateError() error {
 // consumeGeminiResponses uses the existing Gemini->Anthropic processor and
 // Anthropic->Responses event converter, without routing through Chat events.
 // It never fabricates a successful terminal event for an interrupted stream.
-func (s *GeminiMessagesCompatService) consumeGeminiResponses(ctx context.Context, c *gin.Context, resp *http.Response, start time.Time, model string, clientStream, upstreamStream bool, mapping apicompat.ResponsesClientToolMapping, callbacks GeminiResponsesToolStateCallbacks) (*geminiStreamResult, error) {
-	return consumeGeminiResponses(ctx, c, resp, start, model, clientStream, upstreamStream, mapping, callbacks, s.cfg, s.responseHeaderFilter, nil)
-}
-
 type geminiResponsesChatOutput struct{ includeUsage bool }
 
-func consumeGeminiResponses(ctx context.Context, c *gin.Context, resp *http.Response, start time.Time, model string, clientStream, upstreamStream bool, mapping apicompat.ResponsesClientToolMapping, callbacks GeminiResponsesToolStateCallbacks, cfg *config.Config, filter *responseheaders.CompiledHeaderFilter, chat *geminiResponsesChatOutput) (*geminiStreamResult, error) {
+func consumeGeminiResponses(ctx context.Context, c *gin.Context, resp *http.Response, start time.Time, model, upstreamModel string, clientStream, upstreamStream bool, mapping apicompat.ResponsesClientToolMapping, callbacks GeminiResponsesToolStateCallbacks, cfg *config.Config, filter *responseheaders.CompiledHeaderFilter, chat *geminiResponsesChatOutput) (*geminiStreamResult, error) {
 	result := &geminiStreamResult{usage: &ClaudeUsage{}}
 	observer := beginUpstreamResponseModelObservation(c)
 	state := apicompat.NewAnthropicEventToResponsesState()
@@ -373,6 +369,7 @@ func consumeGeminiResponses(ctx context.Context, c *gin.Context, resp *http.Resp
 	if !clientStream {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, filter)
 		c.Header("Content-Type", "application/json; charset=utf-8")
+		writeForwardedModelHeaders(c, upstreamModel)
 		if chat != nil {
 			c.JSON(http.StatusOK, apicompat.ResponsesToChatCompletions(completed, model))
 		} else {

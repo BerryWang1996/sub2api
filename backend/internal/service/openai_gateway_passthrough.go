@@ -2225,6 +2225,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			// 建立 happens-before —— 之后 ResponseWriter 由本循环独占。
 			if !clientOutputStarted {
 				stopKeepalive()
+				if lineStartsClientOutput && !forceFlushFailedEvent && !sawFailedEvent && !sawBareError {
+					writeForwardedModelHeaders(c, mappedModel)
+				}
 			}
 			if !clientOutputStarted && len(pendingLines) > 0 {
 				if !writePendingLines() {
@@ -2385,6 +2388,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err != nil {
 		return nil, fmt.Errorf("restore OpenAI Responses client tools: %w", err)
 	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.GetBytes(body, "error").Type == gjson.Null && gjson.GetBytes(body, "status").String() != "failed" {
+		writeForwardedModelHeaders(c, mappedModel)
+	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -2466,6 +2472,9 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
+	}
+	if ok && resp.StatusCode >= 200 && resp.StatusCode < 300 && gjson.GetBytes(body, "error").Type == gjson.Null && gjson.GetBytes(body, "status").String() != "failed" {
+		writeForwardedModelHeaders(c, mappedModel)
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		// 上游的 Content-Type（text/event-stream）已复制到响应头，而 c.Data
