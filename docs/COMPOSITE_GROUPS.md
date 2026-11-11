@@ -36,7 +36,7 @@ Chat Completions.
   `composite/openai` or `ai/anthropic`.
 
 Use `curl -i` or inspect the SDK's raw HTTP response to read the headers. The
-response body retains its client-facing model name. A heartbeat or another
+setting leaves each adapter’s response body and model naming intact. A heartbeat or another
 early write can commit the headers before the winning attempt is known. Some
 provider adapters also omit the headers when they cannot confirm the forwarded
 model before committing. After an error or disconnect, use the stream terminal
