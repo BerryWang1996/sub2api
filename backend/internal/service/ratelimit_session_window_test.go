@@ -16,6 +16,7 @@ type sessionWindowMockRepo struct {
 	// captured calls
 	sessionWindowCalls []swCall
 	updateExtraCalls   []ueCall
+	updateExtraErr     error
 	clearRateLimitIDs  []int64
 }
 
@@ -42,7 +43,7 @@ func (m *sessionWindowMockRepo) UpdateSessionWindowEnd(_ context.Context, _ int6
 }
 func (m *sessionWindowMockRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
 	m.updateExtraCalls = append(m.updateExtraCalls, ueCall{ID: id, Updates: updates})
-	return nil
+	return m.updateExtraErr
 }
 func (m *sessionWindowMockRepo) ClearRateLimit(_ context.Context, id int64) error {
 	m.clearRateLimitIDs = append(m.clearRateLimitIDs, id)
@@ -338,11 +339,22 @@ func TestUpdateSessionWindow_ClearsUtilizationOnWindowReset(t *testing.T) {
 	if clearCall.Updates["session_window_utilization"] != nil {
 		t.Errorf("expected utilization cleared to nil, got %v", clearCall.Updates["session_window_utilization"])
 	}
+	for _, key := range []string{"passive_usage_5h_sampled_at", "passive_usage_5h_reset", "passive_usage_7d_sampled_at", "passive_usage_7d_oi_sampled_at"} {
+		if got, ok := clearCall.Updates[key]; !ok || got != nil {
+			t.Errorf("expected %s cleared, got %v (present=%t)", key, got, ok)
+		}
+	}
 
 	// Second call: store new utilization
 	storeCall := repo.updateExtraCalls[1]
 	if val, ok := storeCall.Updates["session_window_utilization"].(float64); !ok || val != 0.15 {
 		t.Errorf("expected utilization stored as 0.15, got %v", storeCall.Updates["session_window_utilization"])
+	}
+	if val := storeCall.Updates["passive_usage_5h_reset"]; val != resetUnix {
+		t.Errorf("expected independent 5h reset stored as %d, got %v", resetUnix, val)
+	}
+	if val, ok := storeCall.Updates["passive_usage_5h_sampled_at"].(string); !ok || val == "" {
+		t.Errorf("expected 5h sampled_at, got %v", storeCall.Updates["passive_usage_5h_sampled_at"])
 	}
 }
 
@@ -417,14 +429,18 @@ func TestUpdateSessionWindow_ClearsFable7dOiOnWindowReset(t *testing.T) {
 
 	svc.UpdateSessionWindow(context.Background(), account, headers)
 
-	if len(repo.updateExtraCalls) != 1 {
-		t.Fatalf("expected 1 UpdateExtra (clear) call, got %d", len(repo.updateExtraCalls))
+	if len(repo.updateExtraCalls) != 2 {
+		t.Fatalf("expected a clear and a 5h reset write, got %d UpdateExtra calls", len(repo.updateExtraCalls))
 	}
 	clearUpdates := repo.updateExtraCalls[0].Updates
-	for _, key := range []string{"passive_usage_7d_oi_utilization", "passive_usage_7d_oi_reset"} {
+	for _, key := range []string{"passive_usage_7d_oi_utilization", "passive_usage_7d_oi_reset", "passive_usage_7d_oi_sampled_at"} {
 		if val, present := clearUpdates[key]; !present || val != nil {
 			t.Errorf("expected %s cleared to nil on window reset, got present=%v val=%v", key, present, val)
 		}
+	}
+	resetUpdate := repo.updateExtraCalls[1].Updates
+	if len(resetUpdate) != 1 || resetUpdate["passive_usage_5h_reset"] != resetUnix {
+		t.Errorf("expected only the new 5h reset %d, got %v", resetUnix, resetUpdate)
 	}
 }
 

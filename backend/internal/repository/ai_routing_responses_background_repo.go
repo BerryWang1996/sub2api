@@ -174,16 +174,23 @@ func readAIBackgroundAdmission(ctx context.Context, q aiBackgroundQueryer, userI
 	a.Reserved.SubscriptionDailyUsage = a.Subscription.DailyUsageUSD
 	a.Reserved.SubscriptionWeeklyUsage = a.Subscription.WeeklyUsageUSD
 	a.Reserved.SubscriptionMonthlyUsage = a.Subscription.MonthlyUsageUSD
+	a.Reserved.SubscriptionDailyResetAt = a.Subscription.DailyResetTime()
+	a.Reserved.SubscriptionWeeklyResetAt = a.Subscription.WeeklyResetTime()
+	a.Reserved.SubscriptionMonthlyResetAt = a.Subscription.MonthlyResetTime()
 	a.Reserved.KeyQuotaUsed = a.Key.QuotaUsed
-	effective := func(v float64, start *time.Time, d time.Duration) float64 {
-		if start == nil || !a.Now.Before(start.Add(d)) {
-			return 0
+	effective := func(v float64, start *time.Time, d time.Duration) (float64, *time.Time) {
+		if start == nil {
+			return 0, nil
 		}
-		return v
+		reset := start.Add(d)
+		if !a.Now.Before(reset) {
+			return 0, nil
+		}
+		return v, &reset
 	}
-	a.Reserved.KeyEffective5hUsage = effective(a.Key.Usage5h, a.Key.Window5hStart, 5*time.Hour)
-	a.Reserved.KeyEffective1dUsage = effective(a.Key.Usage1d, a.Key.Window1dStart, 24*time.Hour)
-	a.Reserved.KeyEffective7dUsage = effective(a.Key.Usage7d, a.Key.Window7dStart, 7*24*time.Hour)
+	a.Reserved.KeyEffective5hUsage, a.Reserved.Key5hResetAt = effective(a.Key.Usage5h, a.Key.Window5hStart, service.RateLimitWindow5h)
+	a.Reserved.KeyEffective1dUsage, a.Reserved.Key1dResetAt = effective(a.Key.Usage1d, a.Key.Window1dStart, service.RateLimitWindow1d)
+	a.Reserved.KeyEffective7dUsage, a.Reserved.Key7dResetAt = effective(a.Key.Usage7d, a.Key.Window7dStart, service.RateLimitWindow7d)
 	return a, nil
 }
 

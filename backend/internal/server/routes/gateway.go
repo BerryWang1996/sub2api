@@ -196,6 +196,10 @@ func RegisterGatewayRoutes(
 	gateway.Use(clientRequestID)
 	gateway.Use(opsErrorLogger)
 	gateway.Use(endpointNorm)
+	// The quota representation terminates after read-only authorization, before AI or upstream discovery.
+	// Ordinary collection requests retain this exact middleware chain, including Codex manifest dispatch.
+	gateway.GET("/models", middleware.NewModelQuotaAuth(apiKeyAuth, apiKeyService, subscriptionService, cfg, h.Gateway.ModelQuota),
+		groupModelAllowlist, forwardedModelHeaders, h.Gateway.AIRoute, compositeTarget, requireGroupAnthropic, modelsHandler)
 	gateway.Use(gin.HandlerFunc(apiKeyAuth))
 	gateway.GET("/sub2api/billing", h.Gateway.KeyBillingInfo)
 	gateway.Use(groupModelAllowlist)
@@ -217,10 +221,6 @@ func RegisterGatewayRoutes(
 		// /v1/messages/count_tokens: OpenAI bridges upstream, Grok estimates
 		// locally, and Anthropic-compatible platforms retain their existing path.
 		gateway.POST("/messages/count_tokens", countTokensHandler)
-		// Codex CLI / Codex app refresh their model picker from the provider's
-		// /models endpoint with a client_version query and expect the ChatGPT
-		// Codex manifest format; other clients keep the OpenAI-style list.
-		gateway.GET("/models", modelsHandler)
 		// Single-model discovery never selects the Codex client_version manifest.
 		gateway.GET("/models/:model", h.Gateway.Models)
 		gateway.GET("/usage", h.Gateway.Usage)

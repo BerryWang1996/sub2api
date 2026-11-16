@@ -37,7 +37,17 @@ func NewAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, subscriptionS
 // usage 允许过期/配额耗尽的 Key 查询自身用量，billing 用于读取当前 Key 的倍率配置，
 // 异步生图查询允许已耗尽额度的 Key 拉取自身任务结果。
 func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
+	authenticate := apiKeyAuthForRequest(apiKeyService, subscriptionService, cfg, nil)
+	return func(c *gin.Context) { authenticate(c, nil) }
+}
+
+func apiKeyAuthForRequest(
+	apiKeyService *service.APIKeyService,
+	subscriptionService *service.SubscriptionService,
+	cfg *config.Config,
+	readModelQuota func(*gin.Context, string),
+) func(*gin.Context, *modelQuotaRequest) {
+	return func(c *gin.Context, quota *modelQuotaRequest) {
 		// ── 1. 提取 API Key ──────────────────────────────────────────
 		if rejectInvalidAuthAbuse(c, apiKeyService) {
 			AbortWithError(c, http.StatusTooManyRequests, "INVALID_AUTH_RATE_LIMITED", "Too many invalid authentication attempts; retry later")
@@ -51,9 +61,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
-		queryKey := strings.TrimSpace(c.Query("key"))
-		queryApiKey := strings.TrimSpace(c.Query("api_key"))
-		if queryKey != "" || queryApiKey != "" {
+		if quota == nil && (strings.TrimSpace(c.Query("key")) != "" || strings.TrimSpace(c.Query("api_key")) != "") {
 			recordInvalidAuthFailure(c, apiKeyService)
 			MarkIngressRejected(c, IngressRejectQueryAPIKeyDeprecated)
 			AbortWithError(c, 400, "api_key_in_query_deprecated", "API key in query parameter is deprecated. Please use Authorization header instead.")
@@ -102,7 +110,11 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 		// ── 2. 验证 Key 存在 ─────────────────────────────────────────
 
-		apiKey, err := apiKeyService.GetByKey(c.Request.Context(), apiKeyString)
+		readKey := apiKeyService.GetByKey
+		if quota != nil {
+			readKey = apiKeyService.GetByKeyForModelQuota
+		}
+		apiKey, err := readKey(c.Request.Context(), apiKeyString)
 		if err != nil {
 			if errors.Is(err, service.ErrAPIKeyNotFound) {
 				recordInvalidAuthFailure(c, apiKeyService)
@@ -173,6 +185,11 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		}
 		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID)
 		c.Request = c.Request.WithContext(ctx)
+		if quota != nil {
+			serveAuthenticatedModelQuota(c, apiKey, subscriptionService, cfg, quota, readModelQuota)
+			return
+		}
+
 		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
 		// Async image task polling only reads data that already belongs to the
 		// authenticated key and must remain available after the completed

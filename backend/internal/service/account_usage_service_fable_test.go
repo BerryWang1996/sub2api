@@ -99,7 +99,10 @@ func TestSyncActiveToPassive_WritesFableExtras(t *testing.T) {
 	svc := &AccountUsageService{accountRepo: repo}
 
 	resetAt := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	sampledAt := time.Date(2026, 11, 16, 3, 0, 0, 0, time.UTC)
 	usage := &UsageInfo{
+		UpdatedAt: &sampledAt,
+		FiveHour:  &UsageProgress{},
 		SevenDayFable: &UsageProgress{
 			Utilization: 87,
 			ResetsAt:    &resetAt,
@@ -112,7 +115,11 @@ func TestSyncActiveToPassive_WritesFableExtras(t *testing.T) {
 	case updates := <-repo.updateExtraCh:
 		require.InDelta(t, 0.87, updates["passive_usage_7d_oi_utilization"], 1e-9)
 		require.Equal(t, resetAt.Unix(), updates["passive_usage_7d_oi_reset"])
-		require.Contains(t, updates, "passive_usage_sampled_at")
+		require.Equal(t, sampledAt.Format(time.RFC3339), updates["passive_usage_sampled_at"])
+		require.Equal(t, sampledAt.Format(time.RFC3339), updates["passive_usage_7d_oi_sampled_at"])
+		require.NotContains(t, updates, "passive_usage_7d_sampled_at")
+		require.NotContains(t, updates, "session_window_utilization", "the admin FiveHour placeholder must not replace a real observation")
+		require.NotContains(t, updates, "passive_usage_5h_sampled_at")
 	default:
 		t.Fatal("expected UpdateExtra to be called with fable extras")
 	}

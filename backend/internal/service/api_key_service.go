@@ -738,7 +738,7 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
 	// 非 UTF-8 的 key 不可能存在（生成和自定义的 key 都是 ASCII），且 Postgres 会以
 	// invalid byte sequence 拒绝该参数；直接按不存在处理，避免返回 500。
-	if len(key) == 0 || len(key) > MaxAPIKeyCredentialBytes || !utf8.ValidString(key) {
+	if !validAPIKeyCredential(key) {
 		return nil, ErrAPIKeyNotFound
 	}
 	cacheKey := s.authCacheKey(key)
@@ -789,6 +789,28 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 	apiKey.Key = key
 	s.compileAPIKeyIPRules(apiKey)
 	return apiKey, nil
+}
+
+func validAPIKeyCredential(key string) bool {
+	return len(key) != 0 && len(key) <= MaxAPIKeyCredentialBytes && utf8.ValidString(key)
+}
+
+// GetByKeyForModelQuota reads fresh identity and group access while retaining the auth lookup limit.
+func (s *APIKeyService) GetByKeyForModelQuota(ctx context.Context, key string) (*APIKey, error) {
+	if !validAPIKeyCredential(key) {
+		return nil, ErrAPIKeyNotFound
+	}
+	current, err := s.lookupAPIKeyForAuth(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrAPIKeyNotFound
+	}
+	apiKey := *current
+	apiKey.Key = key
+	s.compileAPIKeyIPRules(&apiKey)
+	return &apiKey, nil
 }
 
 // Update 更新API Key

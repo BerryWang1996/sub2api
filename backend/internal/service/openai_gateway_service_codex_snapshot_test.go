@@ -96,6 +96,11 @@ func TestBuildCodexUsageExtraUpdates_UsesSnapshotUpdatedAt(t *testing.T) {
 	if got := updates["codex_usage_updated_at"]; got != "2026-02-16T10:00:00Z" {
 		t.Fatalf("codex_usage_updated_at = %v, want %s", got, "2026-02-16T10:00:00Z")
 	}
+	for _, key := range []string{"codex_5h_observed_at", "codex_7d_observed_at"} {
+		if got := updates[key]; got != "2026-02-16T10:00:00Z" {
+			t.Errorf("%s = %v, want snapshot time", key, got)
+		}
+	}
 	if got := updates["codex_5h_reset_at"]; got != "2026-02-16T11:00:00Z" {
 		t.Fatalf("codex_5h_reset_at = %v, want %s", got, "2026-02-16T11:00:00Z")
 	}
@@ -160,6 +165,12 @@ func TestBuildCodexUsageExtraUpdates_FallbackToNowWhenUpdatedAtInvalid(t *testin
 	}
 	if got := updates["codex_5h_reset_at"]; got != "2026-02-20T08:30:30Z" {
 		t.Fatalf("codex_5h_reset_at = %v, want %s", got, "2026-02-20T08:30:30Z")
+	}
+	if got := updates["codex_5h_observed_at"]; got != "2026-02-20T08:30:00Z" {
+		t.Errorf("codex_5h_observed_at = %v, want fallback time", got)
+	}
+	if _, ok := updates["codex_7d_observed_at"]; ok {
+		t.Error("an absent 7d observation must not update its timestamp")
 	}
 }
 

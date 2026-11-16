@@ -5,18 +5,20 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/tidwall/gjson"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestAdaptResponsesClientToolsForAnthropic_FlattensNamespace(t *testing.T) {
@@ -636,5 +638,65 @@ func TestClaude55BridgeUsesMappedModelBeforeThinkingConversion(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestForwardAsAnthropicCompatSamplesQuotaWithoutChangingResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    string
+		body    string
+		forward func(*GatewayService, context.Context, *gin.Context, *Account, []byte, *ParsedRequest) (*ForwardResult, error)
+	}{
+		{"chat", "/v1/chat/completions", `{"model":"claude-fable-5","messages":[{"role":"user","content":"hello"}]}`, (*GatewayService).ForwardAsChatCompletions},
+		{"responses", "/v1/responses", `{"model":"claude-fable-5","input":"hello"}`, (*GatewayService).ForwardAsResponses},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const inputTokens, outputTokens = 10, 5
+			reset := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+			account := &Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "fixture-key"}}
+			forward := func(repo *sessionWindowMockRepo) map[string]any {
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+				resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(namespaceToolAnthropicStream()))}
+				resp.Header.Set("Anthropic-Ratelimit-Unified-7d-Utilization", "0.26")
+				resp.Header.Set("Anthropic-Ratelimit-Unified-7d-Reset", strconv.FormatInt(reset.Unix(), 10))
+				svc := &GatewayService{cfg: &config.Config{}, httpUpstream: &anthropicHTTPUpstreamRecorder{resp: resp}}
+				if repo != nil {
+					svc.rateLimitService = newRateLimitServiceForTest(repo)
+				}
+
+				result, err := tc.forward(svc, c.Request.Context(), c, account, []byte(tc.body), nil)
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rec.Code)
+				require.Equal(t, inputTokens, result.Usage.InputTokens)
+				require.Equal(t, outputTokens, result.Usage.OutputTokens)
+				if repo != nil {
+					require.Empty(t, repo.sessionWindowCalls)
+					require.Len(t, repo.updateExtraCalls, 1)
+					call := repo.updateExtraCalls[0]
+					require.Equal(t, account.ID, call.ID)
+					require.Equal(t, 0.26, call.Updates["passive_usage_7d_utilization"])
+					require.Equal(t, reset.Unix(), call.Updates["passive_usage_7d_reset"])
+					require.NotEmpty(t, call.Updates["passive_usage_7d_sampled_at"])
+					require.NotContains(t, call.Updates, "passive_usage_5h_sampled_at")
+				}
+				var body map[string]any
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+				delete(body, "created")
+				delete(body, "created_at")
+				if output, ok := body["output"].([]any); ok {
+					for _, item := range output {
+						delete(item.(map[string]any), "id")
+					}
+				}
+				return body
+			}
+
+			baseline := forward(nil)
+			require.Equal(t, baseline, forward(&sessionWindowMockRepo{}))
+			require.Equal(t, baseline, forward(&sessionWindowMockRepo{updateExtraErr: errors.New("quota write failed")}))
+		})
 	}
 }

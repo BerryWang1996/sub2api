@@ -16,11 +16,14 @@ func TestCachedAntigravityUsage_ForceSkipsFreshCache(t *testing.T) {
 	s.cache.antigravityCache.Store(int64(6), &antigravityUsageCache{usageInfo: stored, timestamp: time.Now()})
 
 	usage, ok := s.cachedAntigravityUsage(6, false)
-	if !ok || usage != stored {
+	if !ok || usage == nil {
 		t.Fatalf("fresh cache should answer a normal query, got ok=%v", ok)
 	}
 	if usage.FiveHour.RemainingSeconds <= 0 {
 		t.Fatalf("remaining seconds should be recalculated, got %d", usage.FiveHour.RemainingSeconds)
+	}
+	if stored.FiveHour.RemainingSeconds != 0 {
+		t.Fatal("returning a display countdown must not mutate the cached sample")
 	}
 	if usage, ok := s.cachedAntigravityUsage(6, true); ok || usage != nil {
 		t.Fatalf("a forced query must skip the cache")

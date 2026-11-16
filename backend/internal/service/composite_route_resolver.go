@@ -113,27 +113,7 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 			return decision, fmt.Errorf("list composite routes: %w", err)
 		}
 		if route, ok := matchCompositeRoute(routes, model, endpoint); ok {
-			if err := validateCompositeRouteDestinationIDs(groupID, route.TargetGroupID, route.TargetAccountID); err != nil {
-				return decision, fmt.Errorf("invalid composite destination: %w", err)
-			}
-			route.TargetGroupID = cloneCompositeRouteID(route.TargetGroupID)
-			route.TargetAccountID = cloneCompositeRouteID(route.TargetAccountID)
-			upstreamModel := strings.TrimSpace(route.UpstreamModel)
-			if upstreamModel == "" {
-				upstreamModel = model
-			}
-			return CompositeRouteDecision{
-				Matched:         true,
-				Source:          CompositeRouteSourceExplicit,
-				GroupID:         groupID,
-				PublicModel:     model,
-				TargetPlatform:  route.TargetPlatform,
-				TargetGroupID:   cloneCompositeRouteID(route.TargetGroupID),
-				TargetAccountID: cloneCompositeRouteID(route.TargetAccountID),
-				UpstreamModel:   upstreamModel,
-				Endpoint:        endpoint,
-				Route:           &route,
-			}, nil
+			return applyExplicitCompositeDecision(decision, route)
 		}
 	}
 
@@ -183,6 +163,25 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 		}, nil
 	}
 	decision.Reason = "no explicit route or built-in detector match"
+	return decision, nil
+}
+
+func applyExplicitCompositeDecision(decision CompositeRouteDecision, route CompositeModelRoute) (CompositeRouteDecision, error) {
+	if err := validateCompositeRouteDestinationIDs(decision.GroupID, route.TargetGroupID, route.TargetAccountID); err != nil {
+		return decision, fmt.Errorf("invalid composite destination: %w", err)
+	}
+	route.TargetGroupID = cloneCompositeRouteID(route.TargetGroupID)
+	route.TargetAccountID = cloneCompositeRouteID(route.TargetAccountID)
+	decision.Matched = true
+	decision.Source = CompositeRouteSourceExplicit
+	decision.TargetPlatform = route.TargetPlatform
+	decision.TargetGroupID = cloneCompositeRouteID(route.TargetGroupID)
+	decision.TargetAccountID = cloneCompositeRouteID(route.TargetAccountID)
+	decision.UpstreamModel = strings.TrimSpace(route.UpstreamModel)
+	if decision.UpstreamModel == "" {
+		decision.UpstreamModel = decision.PublicModel
+	}
+	decision.Route = &route
 	return decision, nil
 }
 

@@ -39,6 +39,12 @@ func TestUpdateSessionWindow_WeeklyUsageWithoutFiveHourHeaders(t *testing.T) {
 			sampled, err := time.Parse(time.RFC3339, sampledRaw)
 			require.NoError(t, err)
 			require.WithinDuration(t, time.Now(), sampled, 2*time.Second)
+			require.Equal(t, sampledRaw, call.Updates["passive_usage_"+window+"_sampled_at"])
+			for _, other := range []string{"5h", "7d", "7d_oi"} {
+				if other != window {
+					require.NotContains(t, call.Updates, "passive_usage_"+other+"_sampled_at")
+				}
+			}
 		})
 	}
 }
@@ -49,6 +55,22 @@ func TestUpdateSessionWindow_NoQuotaHeadersDoesNotWriteUsage(t *testing.T) {
 	svc.UpdateSessionWindow(context.Background(), &Account{ID: 42}, http.Header{})
 	require.Empty(t, repo.updateExtraCalls)
 	require.Empty(t, repo.sessionWindowCalls)
+}
+
+func TestSamplePassiveUsageFromHeadersIgnoresInvalidFiveHourReset(t *testing.T) {
+	repo := &sessionWindowMockRepo{}
+	svc := newRateLimitServiceForTest(repo)
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-5h-utilization", "1")
+	headers.Set("anthropic-ratelimit-unified-5h-reset", strconv.FormatInt(time.Now().Add(30*24*time.Hour).Unix(), 10))
+
+	svc.samplePassiveUsageFromHeaders(t.Context(), &Account{ID: 42}, headers)
+
+	require.Len(t, repo.updateExtraCalls, 1)
+	updates := repo.updateExtraCalls[0].Updates
+	require.Equal(t, 1.0, updates["session_window_utilization"])
+	require.NotEmpty(t, updates["passive_usage_5h_sampled_at"])
+	require.NotContains(t, updates, "passive_usage_5h_reset", "an out-of-range reset cannot replace the established window end")
 }
 
 type weeklyUsageRateLimitRepo struct {

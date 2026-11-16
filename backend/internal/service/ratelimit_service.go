@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -2065,8 +2066,9 @@ func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Acc
 
 	// 检查是否需要初始化时间窗口
 	// 对于 Setup Token 账号，首次成功请求时需要预测时间窗口
+	now := time.Now()
 	var windowStart, windowEnd *time.Time
-	needInitWindow := account.SessionWindowEnd == nil || time.Now().After(*account.SessionWindowEnd)
+	needInitWindow := account.SessionWindowEnd == nil || now.After(*account.SessionWindowEnd)
 
 	// 优先使用响应头中的真实重置时间（比预测更准确）
 	if resetStr := headers.Get("anthropic-ratelimit-unified-5h-reset"); resetStr != "" {
@@ -2078,9 +2080,7 @@ func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Acc
 			}
 			end := time.Unix(ts, 0)
 			// 校验时间戳是否在合理范围内（不早于 5h 前，不晚于 7 天后）
-			minAllowed := time.Now().Add(-5 * time.Hour)
-			maxAllowed := time.Now().Add(7 * 24 * time.Hour)
-			if end.Before(minAllowed) || end.After(maxAllowed) {
+			if !validAnthropicFiveHourReset(end, now) {
 				slog.Warn("account_session_window_header_out_of_range", "account_id", account.ID, "raw_reset", resetStr, "parsed_end", end)
 			} else if needInitWindow || account.SessionWindowEnd == nil || !end.Equal(*account.SessionWindowEnd) {
 				// 窗口需要初始化，或者真实重置时间与已存储的不同，则更新
@@ -2096,7 +2096,6 @@ func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Acc
 
 	// 回退：如果没有真实重置时间且需要初始化窗口，使用预测
 	if windowEnd == nil && needInitWindow && (status == "allowed" || status == "allowed_warning") {
-		now := time.Now()
 		start := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
 		end := start.Add(5 * time.Hour)
 		windowStart = &start
@@ -2108,9 +2107,13 @@ func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Acc
 	if windowEnd != nil && needInitWindow {
 		_ = s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
 			"session_window_utilization":      nil,
+			"passive_usage_5h_sampled_at":     nil,
+			"passive_usage_5h_reset":          nil,
 			"passive_usage_7d_utilization":    nil,
+			"passive_usage_7d_sampled_at":     nil,
 			"passive_usage_7d_reset":          nil,
 			"passive_usage_7d_oi_utilization": nil,
+			"passive_usage_7d_oi_sampled_at":  nil,
 			"passive_usage_7d_oi_reset":       nil,
 			"passive_usage_sampled_at":        nil,
 		})
@@ -2131,48 +2134,41 @@ func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Acc
 	}
 }
 
+func validAnthropicFiveHourReset(reset, now time.Time) bool {
+	return !reset.Before(now.Add(-5*time.Hour)) && !reset.After(now.Add(7*24*time.Hour))
+}
+
 // samplePassiveUsageFromHeaders 从 Anthropic 响应头收集 5h/7d/7d_oi 的
 // utilization 与 reset 被动采样数据，合并为一次 Extra 写入。无数据时不写。
 func (s *RateLimitService) samplePassiveUsageFromHeaders(ctx context.Context, account *Account, headers http.Header) {
-	extraUpdates := make(map[string]any, 6)
-	// 5h utilization（0-1 小数），供 estimateSetupTokenUsage 使用
-	if utilStr := headers.Get("anthropic-ratelimit-unified-5h-utilization"); utilStr != "" {
-		if util, err := strconv.ParseFloat(utilStr, 64); err == nil {
-			extraUpdates["session_window_utilization"] = util
-		}
+	if s.accountRepo == nil || account == nil {
+		return
 	}
-	// 7d utilization（0-1 小数）
-	if utilStr := headers.Get("anthropic-ratelimit-unified-7d-utilization"); utilStr != "" {
-		if util, err := strconv.ParseFloat(utilStr, 64); err == nil {
-			extraUpdates["passive_usage_7d_utilization"] = util
+	extraUpdates := make(map[string]any, 10)
+	now := time.Now().UTC()
+	sampledAt := now.Format(time.RFC3339)
+	for _, w := range []struct{ name, utilizationKey string }{
+		{"5h", "session_window_utilization"},
+		{"7d", "passive_usage_7d_utilization"},
+		{"7d_oi", "passive_usage_7d_oi_utilization"},
+	} {
+		headerPrefix := "anthropic-ratelimit-unified-" + w.name
+		extraPrefix := "passive_usage_" + w.name
+		if util, err := strconv.ParseFloat(headers.Get(headerPrefix+"-utilization"), 64); err == nil && util >= 0 && !math.IsInf(util, 0) {
+			extraUpdates[w.utilizationKey] = util
+			extraUpdates[extraPrefix+"_sampled_at"] = sampledAt
+			extraUpdates["passive_usage_sampled_at"] = sampledAt
 		}
-	}
-	// 7d reset timestamp
-	if resetStr := headers.Get("anthropic-ratelimit-unified-7d-reset"); resetStr != "" {
-		if ts, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
+		if ts, err := strconv.ParseInt(headers.Get(headerPrefix+"-reset"), 10, 64); err == nil && ts > 0 {
 			if ts > 1e11 {
-				ts = ts / 1000
+				ts /= 1000
 			}
-			extraUpdates["passive_usage_7d_reset"] = ts
-		}
-	}
-	// 7d_oi (Fable 专属 7d 窗口) utilization（0-1 小数）
-	if utilStr := headers.Get("anthropic-ratelimit-unified-7d_oi-utilization"); utilStr != "" {
-		if util, err := strconv.ParseFloat(utilStr, 64); err == nil {
-			extraUpdates["passive_usage_7d_oi_utilization"] = util
-		}
-	}
-	// 7d_oi reset timestamp
-	if resetStr := headers.Get("anthropic-ratelimit-unified-7d_oi-reset"); resetStr != "" {
-		if ts, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
-			if ts > 1e11 {
-				ts = ts / 1000
+			if w.name != "5h" || validAnthropicFiveHourReset(time.Unix(ts, 0), now) {
+				extraUpdates[extraPrefix+"_reset"] = ts
 			}
-			extraUpdates["passive_usage_7d_oi_reset"] = ts
 		}
 	}
 	if len(extraUpdates) > 0 {
-		extraUpdates["passive_usage_sampled_at"] = time.Now().UTC().Format(time.RFC3339)
 		if err := s.accountRepo.UpdateExtra(ctx, account.ID, extraUpdates); err != nil {
 			slog.Warn("passive_usage_update_failed", "account_id", account.ID, "error", err)
 		}

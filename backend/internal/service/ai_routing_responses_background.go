@@ -84,21 +84,27 @@ type AIRoutingBackgroundTerminal struct {
 // Pending amounts remain reserved across quota-window resets. They are removed
 // only when released before submission or when authoritative usage is settled.
 type AIRoutingBackgroundReserved struct {
-	UserID                   int64
-	SubscriptionID           int64
-	APIKeyID                 int64
-	UserBalance              float64
-	SubscriptionDailyUsage   float64
-	SubscriptionWeeklyUsage  float64
-	SubscriptionMonthlyUsage float64
-	KeyQuotaUsed             float64
-	KeyEffective5hUsage      float64
-	KeyEffective1dUsage      float64
-	KeyEffective7dUsage      float64
-	SubscriptionUSD          float64
-	KeyQuotaUSD              float64
-	KeyRateUSD               float64
-	Pending                  int
+	UserID                     int64
+	SubscriptionID             int64
+	APIKeyID                   int64
+	UserBalance                float64
+	SubscriptionDailyUsage     float64
+	SubscriptionWeeklyUsage    float64
+	SubscriptionMonthlyUsage   float64
+	KeyQuotaUsed               float64
+	KeyEffective5hUsage        float64
+	KeyEffective1dUsage        float64
+	KeyEffective7dUsage        float64
+	SubscriptionUSD            float64
+	KeyQuotaUSD                float64
+	KeyRateUSD                 float64
+	Pending                    int
+	SubscriptionDailyResetAt   *time.Time `json:"-"`
+	SubscriptionWeeklyResetAt  *time.Time `json:"-"`
+	SubscriptionMonthlyResetAt *time.Time `json:"-"`
+	Key5hResetAt               *time.Time `json:"-"`
+	Key1dResetAt               *time.Time `json:"-"`
+	Key7dResetAt               *time.Time `json:"-"`
 }
 
 type AIRoutingBackgroundPlatformWindows struct {

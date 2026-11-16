@@ -118,7 +118,9 @@ func ProvideGatewayHandler(
 	aiDecider *service.AIRoutingDecider,
 	aiStore service.AIRoutingStore,
 	aiBackground *service.AIRoutingResponsesBackgroundService,
+	accountUsageService *service.AccountUsageService,
 ) *GatewayHandler {
+	gatewayService.SetModelQuotaAccountUsage(accountUsageService)
 	h := NewGatewayHandler(gatewayService, openAIGatewayService, geminiCompatService, antigravityGatewayService,
 		userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool,
 		errorPassthroughService, contentModerationService, userMsgQueueService, cfg, settingService)

@@ -14,7 +14,9 @@ mkdir -p "$temporary_root/bin"
 export FAKE_DOCKER_LOG="$temporary_root/docker.log"
 export FAKE_DOCKER_STATE="$temporary_root/pushed"
 export PUBLISH=true GITHUB_REF=refs/heads/main IMAGE=ghcr.io/berrywang1996/sub2api
-export SOURCE_SHA=0123456789abcdef0123456789abcdef01234567
+export SOURCE_SHA
+SOURCE_SHA=$(git -C "$root" rev-parse HEAD)
+export EXPECTED_SHA="$SOURCE_SHA"
 export RELEASE_TAG
 RELEASE_TAG=$(sh "$root/backend/scripts/resolve-version.sh" --fork-release-tag)
 export GITHUB_OUTPUT="$temporary_root/output"
@@ -90,20 +92,31 @@ for scenario in missing_manifest missing_404 missing_short containerd_manifest; 
   grep -Fx "buildx imagetools inspect $IMAGE@$PUBLISHED_DIGEST --raw" "$FAKE_DOCKER_LOG" >/dev/null
 done
 
-for scenario in exists mismatch wrong_config wrong_identity containerd_mismatch wrong_branch disabled auth network unknown; do
+for scenario in exists mismatch wrong_config wrong_identity containerd_mismatch wrong_branch disabled missing_review wrong_review wrong_checkout auth network unknown; do
   : > "$FAKE_DOCKER_LOG"
   : > "$FAKE_DOCKER_STATE"
   : > "$GITHUB_OUTPUT"
   export FAKE_MODE="$scenario" GITHUB_REF=refs/heads/main PUBLISH=true TESTED_ID="$CONFIG_DIGEST"
+  export SOURCE_SHA
+  SOURCE_SHA=$(git -C "$root" rev-parse HEAD)
+  export EXPECTED_SHA="$SOURCE_SHA"
   [[ "$scenario" != wrong_identity ]] || export TESTED_ID="$OTHER_DIGEST"
   [[ "$scenario" != containerd_mismatch ]] || export TESTED_ID="$PUBLISHED_DIGEST"
   [[ "$scenario" != wrong_branch ]] || export GITHUB_REF=refs/heads/feature
   [[ "$scenario" != disabled ]] || export PUBLISH=false
+  [[ "$scenario" != missing_review ]] || export EXPECTED_SHA=''
+  [[ "$scenario" != wrong_review ]] || export EXPECTED_SHA=0123456789abcdef0123456789abcdef01234567
+  if [[ "$scenario" == wrong_checkout ]]; then
+    export SOURCE_SHA=0123456789abcdef0123456789abcdef01234567 EXPECTED_SHA=0123456789abcdef0123456789abcdef01234567
+  fi
   if bash "$root/.github/release-tools/publish-fork-image.sh" >/dev/null 2>&1; then
     echo "Unexpected publication success for $scenario" >&2
     exit 1
   fi
   [[ ! -s "$GITHUB_OUTPUT" ]]
+  if [[ "$scenario" == missing_review || "$scenario" == wrong_review || "$scenario" == wrong_checkout ]]; then
+    [[ ! -s "$FAKE_DOCKER_LOG" ]]
+  fi
   if [[ "$scenario" != mismatch && "$scenario" != wrong_config && "$scenario" != wrong_identity && "$scenario" != containerd_mismatch ]]; then
     ! grep -q '^push ' "$FAKE_DOCKER_LOG"
   fi

@@ -779,6 +779,21 @@ func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID,
 	return &cp, nil
 }
 
+// GetActiveSubscriptionForModelQuota checks entitlement without the subscription cache or window maintenance.
+func (s *SubscriptionService) GetActiveSubscriptionForModelQuota(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
+	if s == nil || s.userSubRepo == nil {
+		return nil, ErrBillingServiceUnavailable
+	}
+	sub, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if sub == nil || sub.UserID != userID || sub.GroupID != groupID || !sub.IsActive() {
+		return nil, ErrSubscriptionNotFound
+	}
+	return sub, nil
+}
+
 // ListUserSubscriptions 获取用户的所有订阅
 func (s *SubscriptionService) ListUserSubscriptions(ctx context.Context, userID int64) ([]UserSubscription, error) {
 	subs, err := s.userSubRepo.ListByUserID(ctx, userID)

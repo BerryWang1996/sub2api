@@ -6,8 +6,10 @@ set -euo pipefail
 [[ "${PUBLISH:-}" == true && "${GITHUB_REF:-}" == refs/heads/main ]] || { echo 'Publish requires main and publish=true' >&2; exit 1; }
 [[ "${IMAGE:-}" == ghcr.io/berrywang1996/sub2api ]] || { echo 'Unexpected fork image repository' >&2; exit 1; }
 [[ "${SOURCE_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || { echo 'A full source commit SHA is required' >&2; exit 1; }
+[[ "${EXPECTED_SHA:-}" =~ ^[a-f0-9]{40}$ && "$SOURCE_SHA" == "$EXPECTED_SHA" ]] || { echo 'Source does not match the reviewed commit SHA' >&2; exit 1; }
 [[ -n "${RELEASE_TAG:-}" && -n "${GITHUB_OUTPUT:-}" ]] || { echo 'Release tag and GitHub output path are required' >&2; exit 1; }
 root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
+[[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo 'Checkout changed after source review' >&2; exit 1; }
 sh "$root/backend/scripts/resolve-version.sh" --fork-release-tag "$RELEASE_TAG" >/dev/null
 
 release_image="$IMAGE:$RELEASE_TAG"

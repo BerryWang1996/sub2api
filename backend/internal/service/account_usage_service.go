@@ -307,13 +307,18 @@ type ClaudeUsageFetcher interface {
 	FetchUsageWithOptions(ctx context.Context, opts *ClaudeUsageFetchOptions) (*ClaudeUsageResponse, error)
 }
 
+type antigravityUsageFetcher interface {
+	QuotaFetcher
+	GetProxyURL(context.Context, *Account) string
+}
+
 // AccountUsageService 账号使用量查询服务
 type AccountUsageService struct {
 	accountRepo             AccountRepository
 	usageLogRepo            UsageLogRepository
 	usageFetcher            ClaudeUsageFetcher
 	geminiQuotaService      *GeminiQuotaService
-	antigravityQuotaFetcher *AntigravityQuotaFetcher
+	antigravityQuotaFetcher antigravityUsageFetcher
 	grokQuotaFetcher        *GrokQuotaFetcher
 	grokQuotaService        *GrokQuotaService
 	openAIQuotaService      *OpenAIQuotaService
@@ -338,19 +343,22 @@ func NewAccountUsageService(
 	identityCache IdentityCache,
 	tlsFPProfileService *TLSFingerprintProfileService,
 ) *AccountUsageService {
-	return &AccountUsageService{
-		accountRepo:             accountRepo,
-		usageLogRepo:            usageLogRepo,
-		usageFetcher:            usageFetcher,
-		geminiQuotaService:      geminiQuotaService,
-		antigravityQuotaFetcher: antigravityQuotaFetcher,
-		grokQuotaFetcher:        grokQuotaFetcher,
-		grokQuotaService:        grokQuotaService,
-		openAIQuotaService:      openAIQuotaService,
-		cache:                   cache,
-		identityCache:           identityCache,
-		tlsFPProfileService:     tlsFPProfileService,
+	svc := &AccountUsageService{
+		accountRepo:         accountRepo,
+		usageLogRepo:        usageLogRepo,
+		usageFetcher:        usageFetcher,
+		geminiQuotaService:  geminiQuotaService,
+		grokQuotaFetcher:    grokQuotaFetcher,
+		grokQuotaService:    grokQuotaService,
+		openAIQuotaService:  openAIQuotaService,
+		cache:               cache,
+		identityCache:       identityCache,
+		tlsFPProfileService: tlsFPProfileService,
 	}
+	if antigravityQuotaFetcher != nil {
+		svc.antigravityQuotaFetcher = antigravityQuotaFetcher
+	}
+	return svc
 }
 
 func supportsAnthropicPassiveUsage(account *Account) bool {
@@ -413,7 +421,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 
 	// 只有oauth类型账号可以通过API获取usage（有profile scope）
 	if account.CanGetUsage() {
-		var apiResp *ClaudeUsageResponse
+		var snapshot *apiUsageCache
 
 		// 1. 检查缓存（成功响应 3 分钟 / 错误响应 1 分钟）
 		if cached, ok := s.cache.apiCache.Load(accountID); ok {
@@ -424,13 +432,13 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 					return nil, cache.err
 				}
 				if cache.response != nil && age < apiCacheTTL {
-					apiResp = cache.response
+					snapshot = cache
 				}
 			}
 		}
 
 		// 2. 如果没有有效缓存，通过 singleflight 从 API 获取（防止并发击穿）
-		if apiResp == nil {
+		if snapshot == nil {
 			// 随机延迟：打散多账号并发请求，避免同一时刻大量相同 TLS 指纹请求
 			// 触发上游反滥用检测。延迟范围 0~800ms，仅在缓存未命中时生效。
 			jitter := time.Duration(rand.Int64N(int64(apiQueryMaxJitter)))
@@ -450,7 +458,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 							return nil, cache.err
 						}
 						if cache.response != nil && age < apiCacheTTL {
-							return cache.response, nil
+							return cache, nil
 						}
 					}
 				}
@@ -464,21 +472,21 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 					return nil, fetchErr
 				}
 				// 缓存成功响应
-				s.cache.apiCache.Store(accountID, &apiUsageCache{
+				snapshot := &apiUsageCache{
 					response:  resp,
 					timestamp: time.Now(),
-				})
-				return resp, nil
+				}
+				s.cache.apiCache.Store(accountID, snapshot)
+				return snapshot, nil
 			})
 			if flightErr != nil {
 				return nil, flightErr
 			}
-			apiResp, _ = result.(*ClaudeUsageResponse)
+			snapshot = result.(*apiUsageCache)
 		}
 
 		// 3. 构建 UsageInfo（每次都重新计算 RemainingSeconds）
-		now := time.Now()
-		usage := s.buildUsageInfo(apiResp, &now)
+		usage := s.buildUsageInfo(snapshot.response, &snapshot.timestamp)
 
 		// 4. 添加窗口统计（有独立缓存，1 分钟）
 		s.addWindowStats(ctx, account, usage)
@@ -716,26 +724,38 @@ func buildPassiveUsageWindow(extra map[string]any, utilKey, resetKey string) *Us
 // syncActiveToPassive 将主动查询的最新数据回写到 Extra 被动缓存，
 // 这样下次被动加载时能看到最新值。
 func (s *AccountUsageService) syncActiveToPassive(ctx context.Context, accountID int64, usage *UsageInfo) {
-	extraUpdates := make(map[string]any, 4)
+	extraUpdates := make(map[string]any, 10)
+	sampledAt := time.Now()
+	if usage.UpdatedAt != nil {
+		sampledAt = *usage.UpdatedAt
+	}
+	stamp := sampledAt.UTC().Format(time.RFC3339)
 
-	if usage.FiveHour != nil {
+	// The admin view always has a FiveHour object, even when the upstream omits it.
+	if usage.FiveHour != nil && (usage.FiveHour.Utilization > 0 || usage.FiveHour.ResetsAt != nil) {
 		extraUpdates["session_window_utilization"] = usage.FiveHour.Utilization / 100
+		extraUpdates["passive_usage_5h_sampled_at"] = stamp
+		if usage.FiveHour.ResetsAt != nil {
+			extraUpdates["passive_usage_5h_reset"] = usage.FiveHour.ResetsAt.Unix()
+		}
 	}
 	if usage.SevenDay != nil {
 		extraUpdates["passive_usage_7d_utilization"] = usage.SevenDay.Utilization / 100
+		extraUpdates["passive_usage_7d_sampled_at"] = stamp
 		if usage.SevenDay.ResetsAt != nil {
 			extraUpdates["passive_usage_7d_reset"] = usage.SevenDay.ResetsAt.Unix()
 		}
 	}
 	if usage.SevenDayFable != nil {
 		extraUpdates["passive_usage_7d_oi_utilization"] = usage.SevenDayFable.Utilization / 100
+		extraUpdates["passive_usage_7d_oi_sampled_at"] = stamp
 		if usage.SevenDayFable.ResetsAt != nil {
 			extraUpdates["passive_usage_7d_oi_reset"] = usage.SevenDayFable.ResetsAt.Unix()
 		}
 	}
 
 	if len(extraUpdates) > 0 {
-		extraUpdates["passive_usage_sampled_at"] = time.Now().UTC().Format(time.RFC3339)
+		extraUpdates["passive_usage_sampled_at"] = stamp
 		if err := s.accountRepo.UpdateExtra(ctx, accountID, extraUpdates); err != nil {
 			slog.Warn("sync_active_to_passive_failed", "account_id", accountID, "error", err)
 		}
@@ -1106,10 +1126,17 @@ func (s *AccountUsageService) cachedAntigravityUsage(accountID int64, force bool
 	if !ok || time.Since(cache.timestamp) >= antigravityCacheTTL(cache.usageInfo) {
 		return nil, false
 	}
-	usage := cache.usageInfo
-	// 重新计算 RemainingSeconds，避免返回过时的剩余秒数
-	recalcAntigravityRemainingSeconds(usage)
-	return usage, true
+	if cache.usageInfo == nil {
+		return nil, false
+	}
+	usage := *cache.usageInfo
+	// Recalculate the display countdown without modifying the shared cache entry.
+	if usage.FiveHour != nil && usage.FiveHour.ResetsAt != nil {
+		fiveHour := *usage.FiveHour
+		fiveHour.RemainingSeconds = max(0, int(time.Until(*fiveHour.ResetsAt).Seconds()))
+		usage.FiveHour = &fiveHour
+	}
+	return &usage, true
 }
 
 // getAntigravityUsage 获取 Antigravity 账户额度；force 跳过缓存（仍经 singleflight 合并并发请求）。
@@ -1126,7 +1153,7 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 
 	// 2. singleflight 防止并发击穿
 	flightKey := fmt.Sprintf("ag-usage:%d", account.ID)
-	result, flightErr, _ := s.cache.antigravityFlight.Do(flightKey, func() (any, error) {
+	flight := s.cache.antigravityFlight.DoChan(flightKey, func() (any, error) {
 		// 再次检查缓存（等待期间可能已被填充）
 		if usage, ok := s.cachedAntigravityUsage(account.ID, force); ok {
 			return usage, nil
@@ -1156,15 +1183,20 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 		return fetchResult.UsageInfo, nil
 	})
 
-	if flightErr != nil {
-		return nil, flightErr
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-flight:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		usage, ok := result.Val.(*UsageInfo)
+		if !ok || usage == nil {
+			now := time.Now()
+			return &UsageInfo{UpdatedAt: &now}, nil
+		}
+		return usage, nil
 	}
-	usage, ok := result.(*UsageInfo)
-	if !ok || usage == nil {
-		now := time.Now()
-		return &UsageInfo{UpdatedAt: &now}, nil
-	}
-	return usage, nil
 }
 
 func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account, force bool) (*UsageInfo, error) {
@@ -1321,21 +1353,6 @@ func (s *AccountUsageService) shouldProbeGrokBilling(accountID int64, now time.T
 	}
 	s.cache.grokProbeCache.Store(accountID, now)
 	return true
-}
-
-// recalcAntigravityRemainingSeconds 重新计算 Antigravity UsageInfo 中各窗口的 RemainingSeconds
-// 用于从缓存取出时更新倒计时，避免返回过时的剩余秒数
-func recalcAntigravityRemainingSeconds(info *UsageInfo) {
-	if info == nil {
-		return
-	}
-	if info.FiveHour != nil && info.FiveHour.ResetsAt != nil {
-		remaining := int(time.Until(*info.FiveHour.ResetsAt).Seconds())
-		if remaining < 0 {
-			remaining = 0
-		}
-		info.FiveHour.RemainingSeconds = remaining
-	}
 }
 
 // antigravityCacheTTL 根据 UsageInfo 内容决定缓存 TTL
