@@ -1430,7 +1430,11 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		return nil
 	}
 	models, cacheable := modelIDsFromCatalogAccounts(platform, accounts)
-	if cacheable && s.modelsListCache != nil {
+	if !cacheable {
+		// Keep an authoritative empty catalog distinct from the default fallback.
+		return models
+	}
+	if s.modelsListCache != nil {
 		s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
 		modelsListCacheStoreTotal.Add(1)
 	}
