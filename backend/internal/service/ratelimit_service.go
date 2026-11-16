@@ -2141,7 +2141,7 @@ func validAnthropicFiveHourReset(reset, now time.Time) bool {
 // samplePassiveUsageFromHeaders 从 Anthropic 响应头收集 5h/7d/7d_oi 的
 // utilization 与 reset 被动采样数据，合并为一次 Extra 写入。无数据时不写。
 func (s *RateLimitService) samplePassiveUsageFromHeaders(ctx context.Context, account *Account, headers http.Header) {
-	if s.accountRepo == nil || account == nil {
+	if s == nil || s.accountRepo == nil || account == nil {
 		return
 	}
 	extraUpdates := make(map[string]any, 10)
