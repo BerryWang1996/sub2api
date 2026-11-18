@@ -50,7 +50,7 @@ func parseModelQuotaRequest(c *gin.Context) (*modelQuotaRequest, error) {
 	}
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		return nil, errors.New("Malformed model query string")
+		return nil, errors.New("malformed model query string")
 	}
 
 	var include string
@@ -59,14 +59,14 @@ func parseModelQuotaRequest(c *gin.Context) (*modelQuotaRequest, error) {
 			continue
 		}
 		if name != "include" || len(values) != 1 || strings.TrimSpace(values[0]) == "" {
-			return nil, errors.New("The include parameter must use its standard name and a single non-empty value")
+			return nil, errors.New("the include parameter must use its standard name and a single non-empty value")
 		}
 		include = values[0]
 	}
 	if include != "quota" {
 		for _, value := range strings.Split(include, ",") {
 			if strings.EqualFold(strings.TrimSpace(value), "quota") {
-				return nil, errors.New("Request quota with exactly include=quota")
+				return nil, errors.New("request quota with exactly include=quota")
 			}
 		}
 		return nil, nil
@@ -76,7 +76,7 @@ func parseModelQuotaRequest(c *gin.Context) (*modelQuotaRequest, error) {
 	}
 	for name := range query {
 		if name != "include" && name != "endpoint" {
-			return nil, errors.New("Unsupported parameter for include=quota")
+			return nil, errors.New("unsupported parameter for include=quota")
 		}
 	}
 	quota := &modelQuotaRequest{}

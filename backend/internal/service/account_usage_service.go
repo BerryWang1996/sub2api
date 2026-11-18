@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -495,7 +496,11 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 			if flightErr != nil {
 				return nil, flightErr
 			}
-			snapshot = result.(*apiUsageCache)
+			cache, ok := result.(*apiUsageCache)
+			if !ok || cache == nil {
+				return nil, errors.New("unexpected account usage cache result")
+			}
+			snapshot = cache
 		}
 
 		// 3. 构建 UsageInfo（每次都重新计算 RemainingSeconds）
