@@ -54,6 +54,38 @@ func TestModelQuotaRoutingIntegration(t *testing.T) {
 		require.Equal(t, target.ID, *catalog.Routes[0].TargetGroupID)
 	})
 
+	t.Run("catalog preserves passthrough model filter for listing parity", func(t *testing.T) {
+		group := client.Group.Create().SetName("quota-openai-" + uuid.NewString()).SetPlatform(service.PlatformOpenAI).SaveX(ctx)
+		accounts := make(map[bool]int64, 2)
+		for _, enabled := range []bool{false, true} {
+			account := client.Account.Create().
+				SetName("quota-filter-" + uuid.NewString()).
+				SetPlatform(service.PlatformOpenAI).
+				SetType(service.AccountTypeAPIKey).
+				SetCredentials(map[string]any{"model_mapping": map[string]any{"mapped-only": "upstream"}}).
+				SetExtra(map[string]any{"openai_passthrough": true, "openai_passthrough_model_filter": enabled}).
+				SetSchedulable(true).
+				SaveX(ctx)
+			client.AccountGroup.Create().SetAccountID(account.ID).SetGroupID(group.ID).SaveX(ctx)
+			accounts[enabled] = account.ID
+		}
+
+		catalog, err := repo.ReadModelQuotaCatalog(ctx, group.ID, false)
+		require.NoError(t, err)
+		require.Len(t, catalog.Accounts, 2)
+		projected := make(map[int64]service.Account, len(catalog.Accounts))
+		for _, account := range catalog.Accounts {
+			projected[account.ID] = account
+		}
+		for enabled, accountID := range accounts {
+			account, ok := projected[accountID]
+			require.True(t, ok)
+			require.Equal(t, true, account.Extra["openai_passthrough"])
+			require.Equal(t, enabled, account.Extra["openai_passthrough_model_filter"])
+			require.Equal(t, enabled, account.IsOpenAIPassthroughModelFilterEnabled())
+		}
+	})
+
 	t.Run("bounded authorized candidates deduplicate pin and group membership", func(t *testing.T) {
 		bounded, err := repo.ReadModelQuotaTargets(ctx, []int64{target.ID}, []int64{pin.ID, gemini.ID}, 1)
 		require.NoError(t, err)

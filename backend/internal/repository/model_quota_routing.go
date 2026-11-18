@@ -28,6 +28,7 @@ func (r *accountRepository) ReadModelQuotaCatalog(ctx context.Context, groupID i
 		WITH members AS MATERIALIZED (
 			SELECT a.id, a.platform, a.type, a.credentials->'model_mapping' AS mapping,
 			       jsonb_build_object('openai_passthrough', a.extra->'openai_passthrough',
+			           'openai_passthrough_model_filter', a.extra->'openai_passthrough_model_filter',
 			           'openai_oauth_passthrough', a.extra->'openai_oauth_passthrough',
 			           'mixed_scheduling', a.extra->'mixed_scheduling') AS flags
 			FROM account_groups ag JOIN accounts a ON a.id = ag.account_id

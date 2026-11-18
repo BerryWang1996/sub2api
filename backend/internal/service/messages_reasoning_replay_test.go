@@ -129,7 +129,7 @@ func TestForwardAsAnthropicReasoningReplayNoBroadRetry(t *testing.T) {
 
 func TestForwardAsAnthropicReasoningReplaySSEBeforeOutput(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		for _, kind := range []string{"error", "response.failed"} {
+		for _, kind := range []string{"error", "response.failed", "created_then_error"} {
 			t.Run(fmt.Sprintf("stream=%v/%s", stream, kind), func(t *testing.T) {
 				body := reasoningReplayMessagesBody(stream, "gAAAA-stale")
 				c, rec := reasoningReplayContext(body)
@@ -137,14 +137,19 @@ func TestForwardAsAnthropicReasoningReplaySSEBeforeOutput(t *testing.T) {
 				if kind == "response.failed" {
 					payload = `{"type":"response.failed","response":{"status":"failed","error":{"code":"invalid_encrypted_content","message":"bad ciphertext"}}}`
 				}
+				firstResponse := "data: " + payload + "\n\n"
+				if kind == "created_then_error" {
+					firstResponse = `data: {"type":"response.created","response":{"id":"resp_uncommitted","status":"in_progress"}}` + "\n\n" + firstResponse
+				}
 				upstream := &httpUpstreamRecorder{responses: []*http.Response{
-					reasoningReplayHTTPResponse(200, "data: "+payload+"\n\n"), openAICompatSSECompletedResponse("resp_sse_recovered", "gpt-6.1-sol"),
+					reasoningReplayHTTPResponse(200, firstResponse), openAICompatSSECompletedResponse("resp_sse_recovered", "gpt-6.1-sol"),
 				}}
 				svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
 				_, err := svc.ForwardAsAnthropic(context.Background(), c, rawChatCompletionsTestAccount(), body, "stable-cache-key", "gpt-6.1-sol")
 				require.NoError(t, err)
 				require.Len(t, upstream.bodies, 2)
 				require.NotContains(t, rec.Body.String(), "bad ciphertext")
+				require.NotContains(t, rec.Body.String(), "resp_uncommitted")
 				require.NotContains(t, string(upstream.bodies[1]), "gAAAA-stale")
 			})
 		}
@@ -154,11 +159,15 @@ func TestForwardAsAnthropicReasoningReplaySSEBeforeOutput(t *testing.T) {
 func TestForwardAsAnthropicReasoningReplayNeverRetriesAfterStreamOutput(t *testing.T) {
 	body := reasoningReplayMessagesBody(true, "gAAAA-stale")
 	c, rec := reasoningReplayContext(body)
-	upstream := &httpUpstreamRecorder{resp: reasoningReplayHTTPResponse(200, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_started\",\"status\":\"in_progress\"}}\n\ndata: {\"type\":\"error\",\"error\":{\"code\":\"invalid_encrypted_content\",\"message\":\"bad ciphertext\"}}\n\n")}
+	firstResponse := `data: {"type":"response.created","response":{"id":"resp_started","status":"in_progress"}}` + "\n\n" +
+		`data: {"type":"response.output_text.delta","delta":"visible-output"}` + "\n\n" +
+		`data: {"type":"error","error":{"code":"invalid_encrypted_content","message":"bad ciphertext"}}` + "\n\n"
+	upstream := &httpUpstreamRecorder{resp: reasoningReplayHTTPResponse(200, firstResponse)}
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
 	_, err := svc.ForwardAsAnthropic(context.Background(), c, rawChatCompletionsTestAccount(), body, "stable-cache-key", "gpt-6.1-sol")
 	require.Error(t, err)
 	require.Len(t, upstream.bodies, 1)
+	require.Contains(t, rec.Body.String(), "visible-output")
 	require.Contains(t, rec.Body.String(), "event: error")
 }
 

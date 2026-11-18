@@ -25,6 +25,36 @@ func TestModelQuotaCatalogRetainsConcreteAllowedAliases(t *testing.T) {
 	require.JSONEq(t, `"gemini-alias"`, string(entries[0].row["display_name"]))
 }
 
+func TestModelQuotaCatalogMatchesOrdinaryOpenAIListingForPassthroughFilter(t *testing.T) {
+	groupID := int64(17)
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[enabled], func(t *testing.T) {
+			account := Account{
+				ID: groupID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"model_mapping": map[string]any{"mapped-only": "upstream"}},
+				Extra:       map[string]any{"openai_passthrough": true, "openai_passthrough_model_filter": enabled},
+			}
+			repo := &modelsListAccountRepoStub{byGroup: map[int64][]Account{groupID: []Account{account}}}
+			ordinary := (&GatewayService{accountRepo: repo}).GetAvailableModels(context.Background(), &groupID, PlatformOpenAI)
+			ordinary = GatewayModelListingSource(PlatformOpenAI, ordinary, GatewayDefaultModelIDs(PlatformOpenAI))
+
+			entries, err := modelQuotaCatalog(&Group{ID: groupID, Platform: PlatformOpenAI}, ModelQuotaCatalogInventory{Accounts: []Account{account}})
+			require.NoError(t, err)
+			quota := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				quota = append(quota, entry.id)
+			}
+			require.Equal(t, ordinary, quota)
+			if enabled {
+				require.Equal(t, []string{"mapped-only"}, quota)
+			} else {
+				require.NotContains(t, quota, "mapped-only")
+				require.Equal(t, GatewayDefaultModelIDs(PlatformOpenAI), quota)
+			}
+		})
+	}
+}
+
 func TestModelQuotaCompositeEndpointPrecedenceAndPinFallback(t *testing.T) {
 	pin := int64(101)
 	fallback := int64(77)
