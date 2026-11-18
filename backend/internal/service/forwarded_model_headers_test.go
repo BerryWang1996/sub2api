@@ -66,18 +66,21 @@ func TestForwardedModelHeadersScopeAndCommit(t *testing.T) {
 }
 
 func TestForwardedModelResponsesMetadataThenFailover(t *testing.T) {
-	for _, passthrough := range []bool{false, true} {
-		name := "normal"
-		if passthrough {
-			name = "passthrough"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		passthrough, keepalive bool
+	}{
+		{name: "normal"},
+		{name: "passthrough", passthrough: true},
+		{name: "upstream keepalive", keepalive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			c, rec := newForwardedModelTestContext("/v1/responses", CompositeRouteSourceAI, true)
 			svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
 			account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 			stream := func(body, actualModel string) error {
 				resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
-				if passthrough {
+				if tc.passthrough {
 					_, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, account, time.Now(), "public-alias", actualModel)
 					return err
 				}
@@ -86,20 +89,57 @@ func TestForwardedModelResponsesMetadataThenFailover(t *testing.T) {
 			}
 			failed := "data: {\"type\":\"codex.rate_limits\",\"rate_limits\":{}}\n\n" +
 				"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"Our servers are currently overloaded. Please try again later.\"}}}\n\n"
+			if tc.keepalive {
+				failed = "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n" + failed
+			}
 			var failover *UpstreamFailoverError
 			require.ErrorAs(t, stream(failed, "attempt-a"), &failover)
-			require.False(t, c.Writer.Written())
+			require.Equal(t, tc.keepalive, c.Writer.Written())
 			require.Empty(t, c.Writer.Header().Get(responseheaders.ForwardedModelHeader))
 			account.ID = 2
 			success := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"synthetic\"}\n\n" +
 				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_b\",\"model\":\"attempt-b\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n"
 			require.NoError(t, stream(success, "attempt-b"))
-			require.Equal(t, "attempt-b", rec.Result().Header.Get(responseheaders.ForwardedModelHeader))
-			require.Equal(t, "ai/openai", rec.Result().Header.Get(responseheaders.ForwardedRouteHeader))
+			if tc.keepalive {
+				require.Empty(t, rec.Result().Header.Get(responseheaders.ForwardedModelHeader))
+				require.Empty(t, rec.Result().Header.Get(responseheaders.ForwardedRouteHeader))
+				require.Contains(t, rec.Body.String(), "event: keepalive")
+			} else {
+				require.Equal(t, "attempt-b", rec.Result().Header.Get(responseheaders.ForwardedModelHeader))
+				require.Equal(t, "ai/openai", rec.Result().Header.Get(responseheaders.ForwardedRouteHeader))
+			}
 			require.Contains(t, rec.Body.String(), "synthetic")
 			require.NotContains(t, rec.Body.String(), "codex.rate_limits")
 		})
 	}
+}
+
+func TestForwardedModelMessagesBridgePreludeThenFailover(t *testing.T) {
+	c, rec := newForwardedModelTestContext("/v1/messages", "explicit", true)
+	svc := &OpenAIGatewayService{}
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	stream := func(body, model string) error {
+		resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+		_, err := svc.handleAnthropicStreamingResponse(resp, c, account, "public-alias", model, model, time.Now())
+		return err
+	}
+	failed := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\",\"model\":\"attempt-a\"}}\n\n" +
+		"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"Our servers are currently overloaded. Please try again later.\"}}}\n\n"
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, stream(failed, "attempt-a"), &failover)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, c.Writer.Header().Get(responseheaders.ForwardedModelHeader))
+
+	account.ID = 2
+	success := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_b\",\"model\":\"attempt-b\"}}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"synthetic\"}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_b\",\"model\":\"attempt-b\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n"
+	require.NoError(t, stream(success, "attempt-b"))
+	require.Equal(t, "attempt-b", rec.Result().Header.Get(responseheaders.ForwardedModelHeader))
+	require.Equal(t, "composite/openai", rec.Result().Header.Get(responseheaders.ForwardedRouteHeader))
+	require.Contains(t, rec.Body.String(), `"model":"public-alias"`)
+	require.Contains(t, rec.Body.String(), "synthetic")
+	require.NotContains(t, rec.Body.String(), "resp_a")
 }
 
 func TestForwardedModelMessagesKeepsPublicAlias(t *testing.T) {
@@ -115,4 +155,50 @@ func TestForwardedModelMessagesKeepsPublicAlias(t *testing.T) {
 	require.Equal(t, "wire-model", rec.Result().Header.Get(responseheaders.ForwardedModelHeader))
 	require.Equal(t, "composite/openai", rec.Result().Header.Get(responseheaders.ForwardedRouteHeader))
 	require.Contains(t, rec.Body.String(), `"model":"public-alias"`)
+}
+
+func TestForwardedModelMessagesStreamingKeepsPingPrivate(t *testing.T) {
+	const ping = "event: ping\ndata: {\"type\":\"ping\"}\n\n"
+	const success = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"wire-model\"}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	for _, passthrough := range []bool{false, true} {
+		name := "normal"
+		if passthrough {
+			name = "passthrough"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, body, wantModel string
+				wantError             bool
+			}{
+				{name: "first output", body: success, wantModel: "wire-model"},
+				{name: "ping before output", body: ping + success},
+				{name: "ping before error", body: ping + "event: error\ndata: {\"type\":\"error\"}\n\n", wantError: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					c, rec := newForwardedModelTestContext("/v1/messages", "explicit", true)
+					svc := newStreamingResponseTestGatewayService()
+					resp := &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(tc.body)),
+					}
+					account := &Account{ID: 1, Platform: PlatformAnthropic}
+					var err error
+					if passthrough {
+						_, err = svc.handleStreamingResponseAnthropicAPIKeyPassthrough(c.Request.Context(), resp, c, account, time.Now(), "wire-model")
+					} else {
+						_, err = svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "public-alias", "wire-model", false)
+					}
+					if tc.wantError {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+						require.Contains(t, rec.Body.String(), `"model":"public-alias"`)
+					}
+					require.Equal(t, tc.wantModel, rec.Result().Header.Get(responseheaders.ForwardedModelHeader))
+				})
+			}
+		})
+	}
 }

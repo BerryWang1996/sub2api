@@ -1,6 +1,6 @@
 # BerryWang1996 fork：维护与镜像发布
 
-本次发布目标为 **v0.2.21-barry.5**，在已发布的 v0.2.21-barry.4 基础上增加[模型列表额度查询](docs/model-quota.zh-CN.md)。上游基线维持官方 v0.2.21（10ba8f9b4），保留跨厂商、Composite、AI 路由及可选最终转发模型响应头。软件发版须通过完整检查与不可变镜像核验；服务器更新和生产验收单独记录，等待明确部署指令。下文 v0.2.19-barry.3 的说明为历史背景。
+本次发布目标为 **v0.2.23-barry.6**，以上游官方 v0.2.23（5af9afb58）和已发布的 v0.2.21-barry.5 为合并基线。保留跨厂商、Composite、AI 路由、可选最终转发模型响应头及[模型列表额度查询](docs/model-quota.zh-CN.md)。软件发版须通过完整检查与不可变镜像核验；服务器更新和生产验收单独授权和记录。下文 v0.2.19-barry.3 的说明为历史背景。
 
 维护仓库：<https://github.com/BerryWang1996/sub2api>
 
@@ -71,7 +71,7 @@ scripts/fork-sync.sh
 
 ### 版本规则
 
-版本唯一来源为 `backend/cmd/server/VERSION`，格式为 **`vMAJOR.MINOR.PATCH-barry.N`**。前三段保留上游基线，同一基线下 `N` 是从 1 开始的发布迭代号，按数值递增：`.1 < .2 < .10`。拼写固定为 `barry`。一次迭代中的编辑、构建和测试不另加号；成功发布后，下次开发才递增，不复用已发布标签。
+版本唯一来源为 `backend/cmd/server/VERSION`，格式为 **`vMAJOR.MINOR.PATCH-barry.N`**。前三段表示上游基线，`barry.N` 表示 fork 的连续发布迭代号。上游基线升级时继续递增后缀，例如从 `v0.2.21-barry.5` 到 `v0.2.23-barry.6`。一次迭代中的编辑、构建和测试共用一个版本，不复用已发布标签。
 
 历史记录（v0.2.19）：当时发布候选是 **`v0.2.19-barry.3`**，五入口 AI 路由前台请求已完成本地验收，后台功能不开放。2026-11-06 用户已授权提交/push 及发布此镜像；以实际 Fork image 成功结果和不可变 digest 确认发布完成，生产升级仍须另行确认。`v0.2.19-barry.2` 已于 2026-11-05 发布及升级生产，历史证据见 `artifacts/PROJECT_LOCATION.md`；本轮只读核实生产并准备方案。旧的 `barry-YYYYMMDD.N` 镜像和带 commit SHA 的程序版本只作为历史标识保留，不重发旧标签。
 
@@ -82,7 +82,7 @@ scripts/fork-sync.sh
 在 **Actions → Fork image → Run workflow**：
 
 - **仅验证**：可选择功能／同步分支，`publish=false`。
-- **发布镜像**：必须选择 `main`，`publish=true`，输入与 VERSION 一致且未使用过的标签，本次为 `v0.2.21-barry.5`；同时填写 `expected_sha` 为已审查通过的完整 40 位源码提交。工作流在构建和 registry 操作前确认实际 checkout 一致，不因 main 推进而发布另一提交；不覆盖已有版本。
+- **发布镜像**：必须选择 `main`，`publish=true`，输入与 VERSION 一致且未使用过的标签，本次为 `v0.2.23-barry.6`；同时填写 `expected_sha` 为已审查通过的完整 40 位源码提交。工作流在构建和 registry 操作前确认实际 checkout 一致，不因 main 推进而发布另一提交；不覆盖已有版本。
 
 发布前强制执行：
 
@@ -102,7 +102,7 @@ scripts/fork-sync.sh
 镜像地址：
 
 ```text
-ghcr.io/berrywang1996/sub2api:v0.2.21-barry.5
+ghcr.io/berrywang1996/sub2api:v0.2.23-barry.6
 ghcr.io/berrywang1996/sub2api:sha-<完整源代码提交SHA>
 ```
 

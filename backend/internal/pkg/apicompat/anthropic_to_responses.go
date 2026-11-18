@@ -83,7 +83,7 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 
 	// An explicit thinking disable takes precedence over output_config.effort.
 	effort := anthropicReasoningEffort(req)
-	if (openai.IsGPT61SolModelSpelling(req.Model) || openai.IsGPT61TerraModelSpelling(req.Model)) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && effort != "none" {
+	if (openai.GPT62ModelID(req.Model) != "" || openai.IsGPT61SolModelSpelling(req.Model) || openai.IsGPT61TerraModelSpelling(req.Model)) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && effort != "none" {
 		effort = "max"
 	}
 	out.Reasoning = &ResponsesReasoning{
@@ -207,6 +207,16 @@ func anthropicMsgToResponsesItemsWithPolicy(m AnthropicMessage, policy Reasoning
 		return anthropicUserToResponses(m.Content)
 	case "assistant":
 		return anthropicAssistantToResponsesWithPolicy(m.Content, policy)
+	case "system":
+		// Mid-conversation system turns (e.g. hook output) keep system-level
+		// authority: Responses uses developer for them, not user.
+		items, err := anthropicUserToResponses(m.Content)
+		for i := range items {
+			if items[i].Role == "user" {
+				items[i].Role = "developer"
+			}
+		}
+		return items, err
 	default:
 		return anthropicUserToResponses(m.Content)
 	}

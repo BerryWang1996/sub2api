@@ -107,7 +107,7 @@ func (s *GeminiMessagesCompatService) ForwardAsResponses(ctx context.Context, c 
 			return consumeGeminiResponses(ctx, c, resp, start, responses.Model, upstreamModel, responses.Stream, upstreamStream, mapping, callbacks, s.cfg, s.responseHeaderFilter, nil)
 		},
 	}
-	result, err := s.forwardClaudeBodyAsChatCompletions(ctx, c, account, claudeBody, responses.Model, responses.Stream, false, start, options)
+	result, err := s.forwardClaudeBodyAsChatCompletions(ctx, c, account, claudeBody, nil, responses.Model, responses.Stream, false, start, options)
 	if result != nil {
 		result.UpstreamResponseModel = observedUpstreamResponseModel(c)
 		result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)

@@ -7,10 +7,14 @@ func TestDefaultModels_ContainsImageModels(t *testing.T) {
 
 	byID := make(map[string]Model, len(DefaultModels))
 	for _, model := range DefaultModels {
+		if _, exists := byID[model.ID]; exists {
+			t.Fatalf("duplicate curated Gemini model %q", model.ID)
+		}
 		byID[model.ID] = model
 	}
 
 	required := []string{
+		"gemini-4-carbon",
 		"gemini-3.1-flash-image",
 		"gemini-3-pro-image",
 		DefaultTestModel,
@@ -32,7 +36,7 @@ func TestGoogleOneModels_CurrentTextCatalog(t *testing.T) {
 			t.Fatalf("expected Google One model %q to map to itself", id)
 		}
 	}
-	for _, id := range []string{"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.1-flash-image"} {
+	for _, id := range []string{"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-image", "gemini-3.1-flash-image", "gemini-3.5-flash", "gemini-4-carbon"} {
 		if _, ok := mapping[id]; ok {
 			t.Fatalf("did not expect unsupported Google One model %q", id)
 		}
