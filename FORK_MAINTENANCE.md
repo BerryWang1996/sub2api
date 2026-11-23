@@ -1,6 +1,6 @@
 # BerryWang1996 fork：维护与镜像发布
 
-本次发布目标为 **v0.2.23-barry.6**，以上游官方 v0.2.23（5af9afb58）和已发布的 v0.2.21-barry.5 为合并基线。保留跨厂商、Composite、AI 路由、可选最终转发模型响应头及[模型列表额度查询](docs/model-quota.zh-CN.md)。软件发版须通过完整检查与不可变镜像核验；服务器更新和生产验收单独授权和记录。下文 v0.2.19-barry.3 的说明为历史背景。
+本次发布目标为 **v0.2.24-barry.7**，以上游稳定标签 v0.2.24（5c2982a81）和 fork v0.2.23-barry.6 为合并基线。管理员测试 Antigravity OAuth 账号时，模型列表按该账号的上游目录和模型映射生成。保留跨厂商、Composite、AI 路由、可选最终转发模型响应头及[模型列表额度查询](docs/model-quota.zh-CN.md)。软件发版须通过完整检查与不可变镜像核验；服务器更新和生产验收单独授权和记录。下文 v0.2.19-barry.3 的说明为历史背景。
 
 维护仓库：<https://github.com/BerryWang1996/sub2api>
 
@@ -82,7 +82,7 @@ scripts/fork-sync.sh
 在 **Actions → Fork image → Run workflow**：
 
 - **仅验证**：可选择功能／同步分支，`publish=false`。
-- **发布镜像**：必须选择 `main`，`publish=true`，输入与 VERSION 一致且未使用过的标签，本次为 `v0.2.23-barry.6`；同时填写 `expected_sha` 为已审查通过的完整 40 位源码提交。工作流在构建和 registry 操作前确认实际 checkout 一致，不因 main 推进而发布另一提交；不覆盖已有版本。
+- **发布镜像**：必须选择 `main`，`publish=true`，输入与 VERSION 一致且未使用过的标签，本次为 `v0.2.24-barry.7`；同时填写 `expected_sha` 为已审查通过的完整 40 位源码提交。工作流在构建和 registry 操作前确认实际 checkout 一致，不因 main 推进而发布另一提交；不覆盖已有版本。
 
 发布前强制执行：
 
@@ -102,7 +102,7 @@ scripts/fork-sync.sh
 镜像地址：
 
 ```text
-ghcr.io/berrywang1996/sub2api:v0.2.23-barry.6
+ghcr.io/berrywang1996/sub2api:v0.2.24-barry.7
 ghcr.io/berrywang1996/sub2api:sha-<完整源代码提交SHA>
 ```
 

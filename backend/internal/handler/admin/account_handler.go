@@ -2910,7 +2910,19 @@ func (h *AccountHandler) respondAvailableModels(c *gin.Context, account *service
 
 	// Explicit account mappings expose their request-side names to connectivity tests.
 	if account.Platform == service.PlatformAntigravity {
-		response.Success(c, antigravityAccountTestModels(account.Credentials["model_mapping"]))
+		ids := antigravityConfiguredTestModelIDs(account.Credentials["model_mapping"])
+		if account.IsOAuth() {
+			var err error
+			ids, err = h.accountTestService.FetchAntigravityAccountTestModelIDs(c.Request.Context(), account, ids)
+			if err != nil {
+				response.Error(c, http.StatusBadGateway, "Unable to load models for this Antigravity account")
+				return
+			}
+		} else if len(ids) == 0 {
+			response.Success(c, antigravity.DefaultModels())
+			return
+		}
+		response.Success(c, antigravityAccountTestModels(ids))
 		return
 	}
 
@@ -3011,9 +3023,9 @@ func (h *AccountHandler) respondAvailableModels(c *gin.Context, account *service
 	response.Success(c, models)
 }
 
-// antigravityAccountTestModels uses the stored mapping rather than GetModelMapping,
+// antigravityConfiguredTestModelIDs uses the stored mapping rather than GetModelMapping,
 // which supplies defaults and compatibility aliases that the administrator did not configure.
-func antigravityAccountTestModels(rawMapping any) []antigravity.ClaudeModel {
+func antigravityConfiguredTestModelIDs(rawMapping any) []string {
 	var mappedIDs []string
 	switch mapping := rawMapping.(type) {
 	case map[string]any:
@@ -3029,10 +3041,10 @@ func antigravityAccountTestModels(rawMapping any) []antigravity.ClaudeModel {
 			}
 		}
 	}
-	if len(mappedIDs) == 0 {
-		return antigravity.DefaultModels()
-	}
+	return mappedIDs
+}
 
+func antigravityAccountTestModels(mappedIDs []string) []antigravity.ClaudeModel {
 	sort.Strings(mappedIDs)
 	defaultByID := make(map[string]antigravity.ClaudeModel)
 	for _, model := range antigravity.DefaultModels() {

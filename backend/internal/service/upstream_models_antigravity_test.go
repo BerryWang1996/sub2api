@@ -74,6 +74,57 @@ func TestFetchUpstreamSupportedModelsAntigravityUsesGenerationEndpoint(t *testin
 	}
 }
 
+func TestFetchAntigravityAccountTestModelIDsUsesAccountCatalogAndMappings(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer model-sync-test-token":
+			_, _ = io.WriteString(w, `{"models":{"gemini-3.8-flash-high":{},"claude-sonnet-4-6":{},"unknown-upstream-model":{}}}`)
+		case "Bearer other-account-token":
+			var req antigravity.FetchAvailableModelsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Project != "other-account-project" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, _ = io.WriteString(w, `{"models":{"claude-opus-4-7":{}}}`)
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+	withAntigravityModelSyncEndpoints(t, server.URL, server.URL)
+	svc := antigravityModelSyncService()
+	ctx := context.Background()
+
+	account := antigravityModelSyncAccount("Ultra")
+	ids, err := svc.FetchAntigravityAccountTestModelIDs(ctx, account, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"claude-sonnet-4-6", "gemini-3.8-flash-high"}, ids)
+
+	account.Credentials["model_mapping"] = map[string]any{
+		"flash-alias": "gemini-3.8-flash-high",
+		"opus-alias":  "claude-opus-4-7",
+	}
+	configuredIDs := []string{"flash-alias", "opus-alias"}
+	ids, err = svc.FetchAntigravityAccountTestModelIDs(ctx, account, configuredIDs)
+	require.NoError(t, err)
+	require.Equal(t, []string{"flash-alias"}, ids)
+
+	otherAccount := antigravityModelSyncAccount("Ultra")
+	otherAccount.ID++
+	otherAccount.Credentials["access_token"] = "other-account-token"
+	delete(otherAccount.Credentials, "project_id")
+	otherAccount.Credentials[antigravityProjectIDFallbackCredentialKey] = "other-account-project"
+	otherAccount.Credentials["model_mapping"] = account.Credentials["model_mapping"]
+	ids, err = svc.FetchAntigravityAccountTestModelIDs(ctx, otherAccount, configuredIDs)
+	require.NoError(t, err)
+	require.Equal(t, []string{"opus-alias"}, ids)
+
+	delete(otherAccount.Credentials, antigravityProjectIDFallbackCredentialKey)
+	_, err = svc.FetchAntigravityAccountTestModelIDs(ctx, otherAccount, configuredIDs)
+	require.ErrorIs(t, err, errAntigravityProjectIDRequired)
+}
+
 func TestSyncUpstreamModelCatalogAntigravityPreservesDirectCapabilities(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

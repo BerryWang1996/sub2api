@@ -68,6 +68,9 @@
           label-key="display_name"
           :placeholder="loadingModels ? t('common.loading') + '...' : t('admin.accounts.selectTestModel')"
         />
+        <p v-if="!loadingModels && availableModels.length === 0" class="text-xs text-gray-500 dark:text-gray-400" role="status">
+          {{ t(modelLoadFailed ? 'admin.accounts.testModelLoadFailed' : 'admin.accounts.noTestModels') }}
+        </p>
       </div>
 
       <div v-if="isOpenAIAccount" class="space-y-1.5">
@@ -409,6 +412,7 @@ const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
 const testPrompt = ref('')
 const loadingModels = ref(false)
+const modelLoadFailed = ref(false)
 let abortController: AbortController | null = null
 const generatedImages = ref<PreviewMedia[]>([])
 const generatedAudios = ref<PreviewMedia[]>([])
@@ -723,14 +727,17 @@ const pickDefaultModelForMode = () => {
 }
 
 watch(
-  () => props.show,
-  async (newVal) => {
-    if (newVal && props.account) {
+  () => props.show ? props.account?.id : undefined,
+  async (accountID, _previousID, onCleanup) => {
+    if (accountID !== undefined) {
+      const modelRequest = new AbortController()
+      onCleanup(() => modelRequest.abort())
       testPrompt.value = ''
       testMode.value = 'default'
       grokTestMode.value = 'text'
       resetState()
-      await loadAvailableModels()
+      await loadAvailableModels(modelRequest.signal)
+      if (modelRequest.signal.aborted) return
       if (isGrokAccount.value) {
         pickDefaultModelForMode()
         applyDefaultPromptForMode()
@@ -749,17 +756,21 @@ watch(grokTestMode, () => {
   applyDefaultPromptForMode()
 })
 
-const loadAvailableModels = async () => {
-  if (!props.account) return
+const loadAvailableModels = async (signal: AbortSignal) => {
+  const account = props.account
+  if (!account) return
 
   loadingModels.value = true
+  modelLoadFailed.value = false
+  availableModels.value = []
   selectedModelId.value = '' // Reset selection before loading
   try {
-    const models = await adminAPI.accounts.getAvailableModels(props.account.id)
-    availableModels.value = sortAccountTestModels(models, props.account.platform)
+    const models = await adminAPI.accounts.getAvailableModels(account.id, signal)
+    if (signal.aborted) return
+    availableModels.value = sortAccountTestModels(models, account.platform)
     // Default selection by platform
     if (availableModels.value.length > 0) {
-      if (props.account.platform === 'gemini') {
+      if (account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
@@ -768,12 +779,11 @@ const loadAvailableModels = async () => {
       }
     }
   } catch (error) {
+    if (signal.aborted) return
     console.error('Failed to load available models:', error)
-    // Fallback to empty list
-    availableModels.value = []
-    selectedModelId.value = ''
+    modelLoadFailed.value = true
   } finally {
-    loadingModels.value = false
+    if (!signal.aborted) loadingModels.value = false
   }
 }
 

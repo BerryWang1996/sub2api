@@ -191,6 +191,11 @@ func (h *GatewayHandler) routeAIResponsesWebSocket(c *gin.Context, runtime *aiRo
 			_ = aiWSWriteError(ctx, write, "", "invalid_request_error", "Unsupported websocket frame")
 			continue
 		}
+		if _, conflict := requestmodel.ConflictingField("application/json", raw); conflict {
+			middleware.MarkIngressRejected(c, middleware.IngressRejectConflictingRequestFields)
+			closeOpenAIClientWS(ws, coderws.StatusPolicyViolation, "WebSocket payload contains duplicate fields")
+			return true
+		}
 		eventType := gjson.GetBytes(raw, "type").Str
 		switch eventType {
 		case "response.create":

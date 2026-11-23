@@ -90,6 +90,25 @@ function mountModal(account: Record<string, unknown> = {
 }
 
 describe('AccountTestModal', () => {
+  it('keeps the current account models when an earlier account responds late', async () => {
+    let resolveFirst: (models: { id: string; display_name: string }[]) => void = () => {}
+    getAvailableModels.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+    getAvailableModels.mockResolvedValueOnce([{ id: 'gemini-3.8-flash-high', display_name: 'Flash' }])
+    const account = { id: 28, name: 'Antigravity', platform: 'antigravity', type: 'oauth', status: 'active' }
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ show: true })
+    const firstSignal = getAvailableModels.mock.lastCall?.[1]
+
+    await wrapper.setProps({ account: { ...account, id: 29 } } as any)
+    await flushPromises()
+    resolveFirst([{ id: 'claude-sonnet-4-6', display_name: 'Sonnet' }])
+    await flushPromises()
+
+    expect(firstSignal.aborted).toBe(true)
+    expect((wrapper.vm as any).selectedModelId).toBe('gemini-3.8-flash-high')
+    wrapper.unmount()
+  })
+
   it.each(['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-4-argon'])(
     'defaults to current Flash and submits selected Gemini model %s', async (model) => {
     getAvailableModels.mockResolvedValue([

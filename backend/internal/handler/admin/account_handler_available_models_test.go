@@ -356,24 +356,35 @@ func TestAccountHandlerGetAvailableModels_Antigravity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, accountType := range []string{service.AccountTypeOAuth, service.AccountTypeAPIKey} {
-				t.Run(accountType, func(t *testing.T) {
-					svc := &availableModelsAdminService{
-						stubAdminService: newStubAdminService(),
-						account:          service.Account{ID: 51, Platform: service.PlatformAntigravity, Type: accountType, Credentials: tc.credentials},
-					}
-					rec := httptest.NewRecorder()
-					setupAvailableModelsRouter(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/51/models", nil))
-					require.Equal(t, http.StatusOK, rec.Code)
-					var resp struct {
-						Data []antigravity.ClaudeModel `json:"data"`
-					}
-					require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-					require.Equal(t, tc.want, resp.Data)
-				})
+			svc := &availableModelsAdminService{
+				stubAdminService: newStubAdminService(),
+				account:          service.Account{ID: 51, Platform: service.PlatformAntigravity, Type: service.AccountTypeAPIKey, Credentials: tc.credentials},
 			}
+			rec := httptest.NewRecorder()
+			setupAvailableModelsRouter(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/51/models", nil))
+			require.Equal(t, http.StatusOK, rec.Code)
+			var resp struct {
+				Data []antigravity.ClaudeModel `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.Equal(t, tc.want, resp.Data)
 		})
 	}
+}
+
+func TestAccountHandlerGetAvailableModels_AntigravityOAuthCatalogUnavailable(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID: 51, Platform: service.PlatformAntigravity, Type: service.AccountTypeOAuth,
+			Credentials: map[string]any{"project_id": "catalog-test"},
+		},
+	}
+	rec := httptest.NewRecorder()
+	setupAvailableModelsRouter(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/51/models", nil))
+
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Contains(t, rec.Body.String(), "Unable to load models for this Antigravity account")
 }
 
 func TestAccountHandlerSyncUpstreamModels_ConfigErrorReturnsBadRequest(t *testing.T) {
