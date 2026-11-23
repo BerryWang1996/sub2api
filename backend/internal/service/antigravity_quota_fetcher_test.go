@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -562,6 +563,13 @@ func TestFetchQuota_QueriesForwardEndpoint(t *testing.T) {
 		t.Helper()
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			*hits = append(*hits, r.URL.Path)
+			if r.URL.Path == "/v1internal:fetchAvailableModels" || r.URL.Path == "/v1internal:retrieveUserQuotaSummary" {
+				var body antigravity.FetchAvailableModelsRequest
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Project != "project" {
+					http.Error(w, "unexpected quota project", http.StatusBadRequest)
+					return
+				}
+			}
 			w.Header().Set("Content-Type", "application/json")
 			remainingText := strconv.FormatFloat(remaining, 'f', -1, 64)
 			switch r.URL.Path {
@@ -584,10 +592,12 @@ func TestFetchQuota_QueriesForwardEndpoint(t *testing.T) {
 		wantDaily       bool
 		wantUtilization int
 		wantGroupUtil   float64
+		fallbackProject bool
 	}{
 		{
 			name:            "paid Ultra account queries daily endpoint",
 			planType:        "Ultra",
+			fallbackProject: true,
 			wantDaily:       true,
 			wantUtilization: 75,
 			wantGroupUtil:   75,
@@ -636,7 +646,7 @@ func TestFetchQuota_QueriesForwardEndpoint(t *testing.T) {
 			antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
 
 			fetcher := NewAntigravityQuotaFetcher(nil, &config.Config{})
-			res, err := fetcher.FetchQuota(context.Background(), &Account{
+			account := &Account{
 				ID:       80,
 				Platform: PlatformAntigravity,
 				Type:     AccountTypeOAuth,
@@ -645,7 +655,12 @@ func TestFetchQuota_QueriesForwardEndpoint(t *testing.T) {
 					"project_id":   "project",
 					"plan_type":    tt.planType,
 				},
-			}, "")
+			}
+			if tt.fallbackProject {
+				delete(account.Credentials, "project_id")
+				account.Extra = map[string]any{antigravityProjectIDFallbackCredentialKey: "project"}
+			}
+			res, err := fetcher.FetchQuota(context.Background(), account, "")
 			require.NoError(t, err)
 			require.NotNil(t, res)
 			require.NotNil(t, res.UsageInfo)

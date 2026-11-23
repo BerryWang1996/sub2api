@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,7 +95,7 @@ func TestGatewayModelsAnthropicLongContextVariants(t *testing.T) {
 			for _, absent := range test.absent {
 				require.NotContains(t, ids, absent)
 			}
-			require.Len(t, mergeModelIDs(ids, nil), len(ids))
+			require.Len(t, slices.Compact(slices.Sorted(slices.Values(ids))), len(ids))
 		})
 	}
 }

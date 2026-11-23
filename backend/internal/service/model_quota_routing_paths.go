@@ -226,6 +226,9 @@ func (s *GatewayService) modelQuotaAccountPath(ctx context.Context, key *APIKey,
 		return result, false
 	}
 	requestModel := d.UpstreamModel
+	if key.Group.Platform == PlatformAnthropic && d.Endpoint == CompositeRouteEndpointMessages {
+		requestModel = normalizeClaudeCodeLongContextModel(requestModel)
+	}
 	forwardModel := requestModel
 	if channel != nil {
 		mapping := resolveMapping(channel, key.Group.ID, requestModel)

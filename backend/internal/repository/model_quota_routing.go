@@ -27,17 +27,22 @@ func (r *accountRepository) ReadModelQuotaCatalog(ctx context.Context, groupID i
 	rows, err := r.sql.QueryContext(ctx, `
 		WITH members AS MATERIALIZED (
 			SELECT a.id, a.platform, a.type, a.credentials->'model_mapping' AS mapping,
+			       CASE WHEN g.platform = 'anthropic' AND a.platform = 'anthropic'
+			            THEN a.extra->'upstream_model_metadata' END AS model_metadata,
 			       jsonb_build_object('openai_passthrough', a.extra->'openai_passthrough',
 			           'openai_passthrough_model_filter', a.extra->'openai_passthrough_model_filter',
 			           'openai_oauth_passthrough', a.extra->'openai_oauth_passthrough',
 			           'mixed_scheduling', a.extra->'mixed_scheduling') AS flags
 			FROM account_groups ag JOIN accounts a ON a.id = ag.account_id
+			JOIN groups g ON g.id = ag.group_id
 			WHERE ag.group_id = $1 AND a.deleted_at IS NULL AND a.status = $2 AND a.schedulable
 			ORDER BY a.id LIMIT $3
 		), budget AS (
-			SELECT COALESCE(sum(octet_length(mapping::text)), 0) AS bytes FROM members
+			SELECT COALESCE(sum(octet_length(mapping::text)), 0)
+			     + COALESCE(sum(octet_length(model_metadata::text)), 0) AS bytes FROM members
 		)
-		SELECT id, platform, type, CASE WHEN bytes <= $4 THEN mapping ELSE NULL END, flags, bytes > $4
+		SELECT id, platform, type, CASE WHEN bytes <= $4 THEN mapping END,
+		       CASE WHEN bytes <= $4 THEN model_metadata END, flags, bytes > $4
 		FROM members CROSS JOIN budget ORDER BY id`, groupID, service.StatusActive, modelQuotaCatalogAccounts+1, modelQuotaMappingBytes)
 	if err != nil {
 		return result, err
@@ -45,9 +50,9 @@ func (r *accountRepository) ReadModelQuotaCatalog(ctx context.Context, groupID i
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var account service.Account
-		var mapping, flags []byte
+		var mapping, metadata, flags []byte
 		var overBudget bool
-		if err := rows.Scan(&account.ID, &account.Platform, &account.Type, &mapping, &flags, &overBudget); err != nil {
+		if err := rows.Scan(&account.ID, &account.Platform, &account.Type, &mapping, &metadata, &flags, &overBudget); err != nil {
 			return result, err
 		}
 		if overBudget || len(result.Accounts) == modelQuotaCatalogAccounts {
@@ -62,6 +67,9 @@ func (r *accountRepository) ReadModelQuotaCatalog(ctx context.Context, groupID i
 		}
 		if err := json.Unmarshal(flags, &account.Extra); err != nil {
 			return result, err
+		}
+		if len(metadata) > 0 {
+			account.Extra[service.UpstreamModelMetadataExtraKey] = json.RawMessage(metadata)
 		}
 		result.Accounts = append(result.Accounts, account)
 	}

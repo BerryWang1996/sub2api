@@ -70,6 +70,13 @@ func modelQuotaCatalog(group *Group, inventory ModelQuotaCatalogInventory) ([]mo
 		ids = group.ModelAllowlist.FilterForListing(ids)
 	} else {
 		models, _ := modelIDsFromCatalogAccounts(platform, inventory.Accounts)
+		if platform == PlatformAnthropic {
+			var err error
+			models, err = anthropicListingModels(group, models, inventory.Accounts, modelQuotaMaxCombinations)
+			if err != nil {
+				return nil, err
+			}
+		}
 		defaults := GatewayDefaultModelIDs(platform)
 		ids = models
 		if group.ModelAllowlistEnabled() {

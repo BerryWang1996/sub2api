@@ -25,6 +25,26 @@ func TestModelQuotaCatalogRetainsConcreteAllowedAliases(t *testing.T) {
 	require.JSONEq(t, `"gemini-alias"`, string(entries[0].row["display_name"]))
 }
 
+func TestModelQuotaAnthropicLongContextVariantUsesBaseModel(t *testing.T) {
+	group := &Group{ID: 7, Platform: PlatformAnthropic, ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"public[1m]"}}}
+	account := Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+		Credentials: map[string]any{"model_mapping": map[string]any{"public": "claude-sonnet"}}}
+	account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{
+		Models: map[string]UpstreamModelMetadata{"claude-sonnet": {ContextWindow: 1_000_000}},
+	})
+	inventory := ModelQuotaCatalogInventory{Accounts: []Account{account}}
+	entries, err := modelQuotaCatalog(group, inventory)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "public[1m]", entries[0].id)
+	route := planModelQuotaRoute(group, inventory, entries[0].id, CompositeRouteEndpointMessages)
+	require.NotNil(t, route.decision)
+	candidate, ok := (&GatewayService{}).modelQuotaAccountPath(context.Background(), &APIKey{Group: group, GroupID: &group.ID},
+		&account, *route.decision, nil, nil, nil, time.Now())
+	require.True(t, ok)
+	require.Equal(t, "claude-sonnet", candidate.upstreamModel)
+}
+
 func TestModelQuotaCatalogMatchesOrdinaryOpenAIListingForPassthroughFilter(t *testing.T) {
 	groupID := int64(17)
 	for _, enabled := range []bool{false, true} {

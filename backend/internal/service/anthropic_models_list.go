@@ -15,14 +15,40 @@ func (s *GatewayService) ExpandAnthropicLongContextModels(ctx context.Context, g
 		accounts, err = s.accountRepo.ListSchedulable(ctx)
 	}
 	if err != nil {
-		return models
+		accounts = nil
 	}
-	result := cloneStringSlice(models)
-	seen := make(map[string]bool, len(models))
-	for _, model := range models {
+	result, _ := anthropicListingModels(group, models, accounts, 0)
+	return result
+}
+
+// A zero comparison limit is used by ordinary discovery. Quota discovery uses
+// the same projected account data and listing rules under its request budget.
+func anthropicListingModels(group *Group, available []string, accounts []Account, limit int) ([]string, error) {
+	allowlisted := group != nil && group.ModelAllowlistEnabled()
+	source := available
+	if allowlisted || len(source) == 0 {
+		source = GatewayModelListingSource(PlatformAnthropic, available, GatewayDefaultModelIDs(PlatformAnthropic))
+	}
+	type catalog struct {
+		account *Account
+		models  map[string]UpstreamModelMetadata
+	}
+	var catalogs []catalog
+	for i := range accounts {
+		account := &accounts[i]
+		if account.IsAnthropic() {
+			if snapshot := account.GetUpstreamModelMetadataSnapshot(); snapshot != nil {
+				catalogs = append(catalogs, catalog{account, snapshot.Models})
+			}
+		}
+	}
+	result := cloneStringSlice(source)
+	seen := make(map[string]bool, len(source))
+	for _, model := range source {
 		seen[strings.ToLower(model)] = true
 	}
-	for _, model := range models {
+	checks := 0
+	for _, model := range source {
 		if strings.HasSuffix(strings.ToLower(model), claudeCodeLongContextModelSuffix) || strings.Contains(model, "*") {
 			continue
 		}
@@ -30,18 +56,30 @@ func (s *GatewayService) ExpandAnthropicLongContextModels(ctx context.Context, g
 		if group != nil {
 			routedAccountIDs = group.GetRoutingAccountIDs(model)
 		}
-		for _, account := range accounts {
-			if !account.IsAnthropic() || !account.IsModelSupported(model) ||
+		variant := model + claudeCodeLongContextModelSuffix
+		if seen[strings.ToLower(variant)] {
+			continue
+		}
+		for _, catalog := range catalogs {
+			checks++
+			if limit > 0 && checks > limit {
+				return nil, ErrModelQuotaCatalogBudget
+			}
+			account := catalog.account
+			if !account.IsModelSupported(model) ||
 				(len(routedAccountIDs) > 0 && !slices.Contains(routedAccountIDs, account.ID)) {
 				continue
 			}
-			metadata, ok := account.GetUpstreamModelMetadata(account.GetMappedModel(model))
-			variant := model + claudeCodeLongContextModelSuffix
-			if ok && metadata.ContextWindow >= 900_000 && !seen[strings.ToLower(variant)] {
+			metadata := catalog.models[strings.TrimSpace(account.GetMappedModel(model))]
+			if metadata.ContextWindow >= 900_000 {
 				result = append(result, variant)
 				seen[strings.ToLower(variant)] = true
+				break
 			}
 		}
 	}
-	return result
+	if len(available) == 0 && len(result) == len(source) && !allowlisted {
+		return available, nil // preserve the default model rows and their metadata
+	}
+	return result, nil
 }

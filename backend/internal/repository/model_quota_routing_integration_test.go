@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +85,26 @@ func TestModelQuotaRoutingIntegration(t *testing.T) {
 			require.Equal(t, enabled, account.Extra["openai_passthrough_model_filter"])
 			require.Equal(t, enabled, account.IsOpenAIPassthroughModelFilterEnabled())
 		}
+	})
+
+	t.Run("Anthropic variant metadata is group scoped and byte bounded", func(t *testing.T) {
+		extra := map[string]any{service.UpstreamModelMetadataExtraKey: service.UpstreamModelMetadataSnapshot{
+			Models: map[string]service.UpstreamModelMetadata{"long": {ContextWindow: 1_000_000}},
+		}}
+		client.Account.UpdateOneID(foreign.ID).SetExtra(extra).SaveX(ctx)
+		catalog, err := repo.ReadModelQuotaCatalog(ctx, unrelated.ID, false)
+		require.NoError(t, err)
+		require.Len(t, catalog.Accounts, 1)
+		meta, ok := catalog.Accounts[0].GetUpstreamModelMetadata("long")
+		require.True(t, ok)
+		require.EqualValues(t, 1_000_000, meta.ContextWindow)
+
+		extra[service.UpstreamModelMetadataExtraKey] = map[string]any{"source": strings.Repeat("a", modelQuotaMappingBytes+1)}
+		client.Account.UpdateOneID(foreign.ID).SetExtra(extra).SaveX(ctx)
+		_, err = repo.ReadModelQuotaCatalog(ctx, unrelated.ID, false)
+		require.ErrorIs(t, err, service.ErrModelQuotaCatalogBudget)
+		_, err = repo.ReadModelQuotaCatalog(ctx, source.ID, true)
+		require.NoError(t, err)
 	})
 
 	t.Run("bounded authorized candidates deduplicate pin and group membership", func(t *testing.T) {
