@@ -32,7 +32,10 @@ func TestModelQuotaRoutingIntegration(t *testing.T) {
 		SetCredentials(map[string]any{"model_mapping": map[string]any{"not-visible": "claude-sonnet"}}).SetSchedulable(false).SaveX(ctx)
 	gemini := client.Account.Create().SetName("target").SetPlatform(service.PlatformGemini).SetType(service.AccountTypeAPIKey).SetSchedulable(true).SaveX(ctx)
 	pin := client.Account.Create().SetName("pin").SetPlatform(service.PlatformOpenAI).SetType(service.AccountTypeOAuth).SetSchedulable(true).SaveX(ctx)
-	foreign := client.Account.Create().SetName("foreign").SetPlatform(service.PlatformAnthropic).SetType(service.AccountTypeAPIKey).SetSchedulable(true).SaveX(ctx)
+	foreign := client.Account.Create().SetName("foreign").SetPlatform(service.PlatformAnthropic).SetType(service.AccountTypeAPIKey).
+		SetExtra(map[string]any{service.UpstreamModelMetadataExtraKey: service.UpstreamModelMetadataSnapshot{
+			Models: map[string]service.UpstreamModelMetadata{"long": {ContextWindow: 1_000_000}},
+		}}).SetSchedulable(true).SaveX(ctx)
 	client.AccountGroup.Create().SetAccountID(cooling.ID).SetGroupID(source.ID).SaveX(ctx)
 	client.AccountGroup.Create().SetAccountID(manual.ID).SetGroupID(source.ID).SaveX(ctx)
 	client.AccountGroup.Create().SetAccountID(gemini.ID).SetGroupID(target.ID).SaveX(ctx)
@@ -88,10 +91,6 @@ func TestModelQuotaRoutingIntegration(t *testing.T) {
 	})
 
 	t.Run("Anthropic variant metadata is group scoped and byte bounded", func(t *testing.T) {
-		extra := map[string]any{service.UpstreamModelMetadataExtraKey: service.UpstreamModelMetadataSnapshot{
-			Models: map[string]service.UpstreamModelMetadata{"long": {ContextWindow: 1_000_000}},
-		}}
-		client.Account.UpdateOneID(foreign.ID).SetExtra(extra).SaveX(ctx)
 		catalog, err := repo.ReadModelQuotaCatalog(ctx, unrelated.ID, false)
 		require.NoError(t, err)
 		require.Len(t, catalog.Accounts, 1)
@@ -99,8 +98,10 @@ func TestModelQuotaRoutingIntegration(t *testing.T) {
 		require.True(t, ok)
 		require.EqualValues(t, 1_000_000, meta.ContextWindow)
 
-		extra[service.UpstreamModelMetadataExtraKey] = map[string]any{"source": strings.Repeat("a", modelQuotaMappingBytes+1)}
-		client.Account.UpdateOneID(foreign.ID).SetExtra(extra).SaveX(ctx)
+		oversized := client.Account.Create().SetName("oversized").SetPlatform(service.PlatformAnthropic).SetType(service.AccountTypeAPIKey).
+			SetExtra(map[string]any{service.UpstreamModelMetadataExtraKey: map[string]any{"source": strings.Repeat("a", modelQuotaMappingBytes+1)}}).
+			SetSchedulable(true).SaveX(ctx)
+		client.AccountGroup.Create().SetAccountID(oversized.ID).SetGroupID(unrelated.ID).SaveX(ctx)
 		_, err = repo.ReadModelQuotaCatalog(ctx, unrelated.ID, false)
 		require.ErrorIs(t, err, service.ErrModelQuotaCatalogBudget)
 		_, err = repo.ReadModelQuotaCatalog(ctx, source.ID, true)
